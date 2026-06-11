@@ -13,6 +13,11 @@ on:
           - "3.11"
           - "3.12"
           - "3.13"
+      build_macos_app:
+        description: Build JUCE Theme Studio.app (double-clickable Mac app)
+        required: false
+        default: true
+        type: boolean
       build_juce_preview:
         description: Build JUCE Live Preview companion app
         required: false
@@ -52,11 +57,27 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: python -m pytest -p pytest
 
-      - name: Build Python distribution
+      - name: Build JUCE Theme Studio.app
+        if: inputs.build_macos_app
+        working-directory: juce_theme_studio
+        run: bash packaging/build_macos_app.sh
+
+      - name: Package JUCE Theme Studio.app
+        if: inputs.build_macos_app
+        working-directory: juce_theme_studio
+        run: |
+          mkdir -p "${{ runner.temp }}/release"
+          cp packaging/README-MACOS.txt "${{ runner.temp }}/release/"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "dist/JUCE Theme Studio.app" \
+            "${{ runner.temp }}/release/JUCE-Theme-Studio-macOS.zip"
+          ls -la "${{ runner.temp }}/release/"
+
+      - name: Build Python wheel (developers)
         working-directory: juce_theme_studio
         run: |
           pip install build
-          python -m build --wheel --sdist
+          python -m build --wheel
           ls -la dist/
 
       - name: Clone JUCE
@@ -75,28 +96,43 @@ jobs:
             -DJUCE_DIR="${{ runner.temp }}/JUCE"
           cmake --build build --config Release
           find build -type d -name '*.app' -maxdepth 5 -print
-          find build -type f -perm +111 -maxdepth 6 -print
 
-      - name: Collect JUCE Live Preview artifacts
+      - name: Package JUCE Live Preview.app
         if: inputs.build_juce_preview
         working-directory: juce_theme_studio/examples/juce_live_preview
         run: |
-          mkdir -p "${{ runner.temp }}/juce-artifacts"
-          find build -type d -name '*.app' -maxdepth 5 -exec cp -R {} "${{ runner.temp }}/juce-artifacts/" \;
-          find build -type f -name 'JuceLivePreview' -maxdepth 6 -exec cp {} "${{ runner.temp }}/juce-artifacts/" \;
-          ls -laR "${{ runner.temp }}/juce-artifacts"
+          mkdir -p "${{ runner.temp }}/release"
+          APP_PATH="$(find build -type d -name '*.app' -maxdepth 5 | head -1)"
+          if [[ -z "$APP_PATH" ]]; then
+            echo "No .app bundle found under build/" >&2
+            find build -maxdepth 6 -print >&2
+            exit 1
+          fi
+          echo "Packaging $APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$APP_PATH" \
+            "${{ runner.temp }}/release/JUCE-Live-Preview-macOS.zip"
+          ls -la "${{ runner.temp }}/release/"
 
-      - name: Upload Python build artifacts
+      - name: Upload JUCE Theme Studio.app
+        if: inputs.build_macos_app
         uses: actions/upload-artifact@v4
         with:
-          name: python-dist-macos
-          path: juce_theme_studio/dist/*
+          name: JUCE-Theme-Studio-macOS
+          path: ${{ runner.temp }}/release/JUCE-Theme-Studio-macOS.zip
           if-no-files-found: error
 
-      - name: Upload JUCE Live Preview binary
+      - name: Upload JUCE Live Preview.app
         if: inputs.build_juce_preview
         uses: actions/upload-artifact@v4
         with:
-          name: juce-live-preview-macos
-          path: ${{ runner.temp }}/juce-artifacts/**
+          name: JUCE-Live-Preview-macOS
+          path: ${{ runner.temp }}/release/JUCE-Live-Preview-macOS.zip
+          if-no-files-found: error
+
+      - name: Upload Python wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-macos
+          path: juce_theme_studio/dist/*.whl
           if-no-files-found: error
