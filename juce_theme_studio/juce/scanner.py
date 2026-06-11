@@ -91,7 +91,7 @@ def scan_juce_project(project_root: Path) -> ScanResult:
             else:
                 result.resource_dirs.append(dirname)
 
-    image_exts = {".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif"}
+    image_exts = {".png", ".jpg", ".jpeg", ".svg", ".webp", ".gif", ".bmp"}
     for path in project_root.rglob("*"):
         if STUDIO_IGNORE in path.parts:
             continue

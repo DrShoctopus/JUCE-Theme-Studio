@@ -195,22 +195,42 @@ class CanvasScene(QGraphicsScene):
 
     def drawBackground(self, painter: QPainter, rect: QRectF | QRect) -> None:
         super().drawBackground(painter, rect)
-        if not self.snap_to_grid:
+        if not self.snap_to_grid or self.screen is None:
+            return
+        if isinstance(rect, QRect):
+            rect = QRectF(rect)
+        # Only draw grid within the canvas bounds to avoid millions of lines when zoomed out.
+        clip = QRectF(0, 0, self.screen.canvas_width, self.screen.canvas_height)
+        visible = rect.intersected(clip)
+        if visible.isEmpty():
             return
         g = self.grid_size
-        left = int(rect.left()) - (int(rect.left()) % g)
-        top = int(rect.top()) - (int(rect.top()) % g)
+        left = max(0, int(visible.left()) - (int(visible.left()) % g))
+        top = max(0, int(visible.top()) - (int(visible.top()) % g))
+        right = min(self.screen.canvas_width, int(visible.right()))
+        bottom = min(self.screen.canvas_height, int(visible.bottom()))
         lines = QPen(QColor(50, 50, 50, 80))
-        for x in range(left, int(rect.right()), g):
-            painter.setPen(lines)
-            painter.drawLine(x, int(rect.top()), x, int(rect.bottom()))
-        for y in range(top, int(rect.bottom()), g):
-            painter.drawLine(int(rect.left()), y, int(rect.right()), y)
+        painter.setPen(lines)
+        max_lines = 500
+        x, x_count = left, 0
+        while x <= right and x_count < max_lines:
+            painter.drawLine(x, top, x, bottom)
+            x += g
+            x_count += 1
+        y, y_count = top, 0
+        while y <= bottom and y_count < max_lines:
+            painter.drawLine(left, y, right, y)
+            y += g
+            y_count += 1
 
 
 class CanvasView(QGraphicsView):
     # asset_id, x, y, is_sprite, target_control_id (empty = new control)
     asset_dropped = Signal(str, int, int, bool, str)
+
+    ZOOM_MIN = 0.1
+    ZOOM_MAX = 5.0
+    ZOOM_STEP = 1.15
 
     def __init__(self, scene: CanvasScene) -> None:
         super().__init__(scene)
@@ -219,6 +239,11 @@ class CanvasView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setAcceptDrops(True)
         self._zoom = 1.0
+
+    def _apply_zoom(self, zoom: float) -> None:
+        self._zoom = zoom
+        self.resetTransform()
+        self.scale(self._zoom, self._zoom)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasFormat(MIME_ASSET_ID):
@@ -253,12 +278,17 @@ class CanvasView(QGraphicsView):
         event.acceptProposedAction()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-        self._zoom = max(0.1, min(5.0, self._zoom * factor))
-        self.setTransform(self.transform().scale(factor, factor))
+        factor = self.ZOOM_STEP if event.angleDelta().y() > 0 else 1 / self.ZOOM_STEP
+        new_zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom * factor))
+        if abs(new_zoom - self._zoom) < 1e-6:
+            event.accept()
+            return
+        self._apply_zoom(new_zoom)
+        event.accept()
 
     def fit_canvas(self) -> None:
         scene = self.scene()
         if scene and scene.sceneRect().isValid():
+            self.resetTransform()
             self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-            self._zoom = 1.0
+            self._zoom = self.transform().m11()
