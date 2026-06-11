@@ -1,0 +1,102 @@
+"""Git commit dialog — explicit confirmation required."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMessageBox,
+    QPlainTextEdit,
+    QVBoxLayout,
+)
+
+from juce_theme_studio.git_tools.git import (
+    commit,
+    get_diff,
+    get_status,
+)
+
+
+class GitCommitDialog(QDialog):
+    def __init__(self, project_root: Path, parent=None) -> None:
+        super().__init__(parent)
+        self.project_root = project_root
+        self.setWindowTitle("Commit Theme Changes")
+        self.setMinimumSize(600, 500)
+
+        layout = QVBoxLayout(self)
+        self._status = get_status(project_root)
+        layout.addWidget(QLabel(f"Branch: {self._status.branch or 'unknown'}"))
+
+        if self._status.has_unrelated_changes:
+            warn = QLabel(
+                "Warning: This repository has uncommitted changes outside .juce_theme_studio/. "
+                "Only select theme files to commit."
+            )
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color: #c90;")
+            layout.addWidget(warn)
+
+        self._file_list = QListWidget()
+        studio_prefix = ".juce_theme_studio"
+        candidates = sorted(
+            set(self._status.changed_files + self._status.untracked_files)
+        )
+        theme_files = [f for f in candidates if f.startswith(studio_prefix)]
+        for f in theme_files:
+            self._file_list.addItem(f)
+        layout.addWidget(QLabel("Files to stage:"))
+        layout.addWidget(self._file_list)
+
+        self._diff = QPlainTextEdit()
+        self._diff.setReadOnly(True)
+        layout.addWidget(QLabel("Diff preview:"))
+        layout.addWidget(self._diff)
+        self._file_list.currentTextChanged.connect(self._show_diff)
+
+        self._message = QLineEdit("Add/update JUCE theme assets and generated layout files")
+        layout.addWidget(QLabel("Commit message:"))
+        layout.addWidget(self._message)
+
+        self._confirm = QCheckBox("I confirm I want to commit the selected files")
+        layout.addWidget(self._confirm)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._do_commit)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        if theme_files:
+            self._file_list.setCurrentRow(0)
+
+    def _show_diff(self, path: str) -> None:
+        if path:
+            diff = get_diff(self.project_root, path)
+            self._diff.setPlainText(diff.diff_text or "(no diff)")
+
+    def _do_commit(self) -> None:
+        if not self._confirm.isChecked():
+            QMessageBox.warning(self, "Confirm", "Please check the confirmation box to commit.")
+            return
+        files = [self._file_list.item(i).text() for i in range(self._file_list.count())]
+        if not files:
+            QMessageBox.warning(self, "No files", "No theme files to commit.")
+            return
+        msg = self._message.text().strip()
+        if not msg:
+            QMessageBox.warning(self, "Message", "Commit message is required.")
+            return
+        try:
+            sha = commit(self.project_root, msg, files)
+            QMessageBox.information(self, "Committed", f"Commit created: {sha}")
+            self.accept()
+        except Exception as exc:
+            QMessageBox.critical(self, "Commit failed", str(exc))
