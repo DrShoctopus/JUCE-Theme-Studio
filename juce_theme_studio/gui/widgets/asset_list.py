@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, Qt
+from PySide6.QtCore import QMimeData, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import QListWidget, QListWidgetItem
 
@@ -11,10 +11,20 @@ MIME_ASSET_SPRITE = "application/x-juce-asset-sprite"
 
 
 class AssetListWidget(QListWidget):
+    asset_clicked = Signal(str, bool)  # asset_id, is_sprite
+
     def __init__(self) -> None:
         super().__init__()
         self.setDragEnabled(True)
         self.setDefaultDropAction(Qt.DropAction.CopyAction)
+        self.itemClicked.connect(self._on_item_clicked)
+
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        asset_id = item.data(Qt.ItemDataRole.UserRole)
+        if not asset_id:
+            return
+        is_sprite = bool(item.data(Qt.ItemDataRole.UserRole + 1))
+        self.asset_clicked.emit(str(asset_id), is_sprite)
 
     def startDrag(self, supportedActions) -> None:  # noqa: ANN001
         item = self.currentItem()

@@ -102,6 +102,8 @@ class MainWindow(QMainWindow):
         self._clipboard: list[Control] = []
         self._preview_mode = False
         self._live_preview = LivePreviewBridge(self)
+        self._assign_asset_id: str | None = None
+        self._assign_asset_is_sprite = False
 
         self._build_toolbar()
         self._build_menus()
@@ -214,7 +216,12 @@ class MainWindow(QMainWindow):
         al = QVBoxLayout(assets_box)
         al.addWidget(QLabel("Asset Library"))
         self._asset_list = AssetListWidget()
+        self._asset_list.asset_clicked.connect(self._on_asset_clicked)
         al.addWidget(self._asset_list)
+        assign_hint = QLabel("Click asset → click control to assign")
+        assign_hint.setWordWrap(True)
+        assign_hint.setStyleSheet("color: #888; font-size: 11px;")
+        al.addWidget(assign_hint)
         row_assets = QHBoxLayout()
         row_assets.addWidget(self._btn("Import Asset", self._import_asset))
         row_assets.addWidget(self._btn("From Project", lambda: self._import_from_project()))
@@ -238,6 +245,7 @@ class MainWindow(QMainWindow):
         self._canvas = CanvasView(self._scene)
         self._scene.selectionChanged.connect(self._on_canvas_selection)
         self._scene.control_moved.connect(lambda _cid: self._mark_live_dirty())
+        self._scene.control_clicked.connect(self._on_control_clicked)
         self._canvas.asset_dropped.connect(self._on_asset_dropped)
 
         right = QSplitter(Qt.Orientation.Vertical)
@@ -297,6 +305,12 @@ class MainWindow(QMainWindow):
         key = event.key()
         mods = event.modifiers()
         step = NUDGE_STEP_LARGE if mods & Qt.KeyboardModifier.ShiftModifier else NUDGE_STEP
+
+        if key == Qt.Key.Key_Escape and self._assign_asset_id:
+            self._clear_assign_mode()
+            self._log_panel.append_log("Asset assignment cancelled.")
+            event.accept()
+            return
 
         if key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
             dx = dy = 0
@@ -399,6 +413,7 @@ class MainWindow(QMainWindow):
             return
         screen = self._project.manifest.screens[row]
         self._current_screen_id = screen.id
+        self._clear_assign_mode()
         self._scene.load_screen(screen)
         self._layers.set_screen(screen)
         self._screen_panel.set_screen(screen)
@@ -626,6 +641,69 @@ class MainWindow(QMainWindow):
     def _mark_live_dirty(self) -> None:
         self._live_preview.mark_dirty()
 
+    def _on_asset_clicked(self, asset_id: str, is_sprite: bool) -> None:
+        if not self._project:
+            return
+        asset = self._project.manifest.get_asset(asset_id)
+        if asset is None:
+            return
+        target = self._scene.get_selected_control()
+        if target is not None:
+            self._offer_link_asset_to_control(
+                target,
+                asset,
+                is_sprite,
+                prompt="Assign this asset to the selected control?",
+            )
+            return
+        self._assign_asset_id = asset_id
+        self._assign_asset_is_sprite = is_sprite
+        self._canvas.set_assign_mode(True)
+        self._log_panel.append_log(
+            f"Click a control on the canvas to assign '{asset.name}'. (Esc to cancel)",
+        )
+
+    def _on_control_clicked(self, control_id: str) -> None:
+        if not self._project or not self._assign_asset_id:
+            return
+        screen = self._current_screen()
+        if not screen:
+            return
+        target = next((c for c in screen.controls if c.id == control_id), None)
+        if target is None:
+            return
+        asset = self._project.manifest.get_asset(self._assign_asset_id)
+        if asset is None:
+            self._clear_assign_mode()
+            return
+        self._offer_link_asset_to_control(
+            target,
+            asset,
+            self._assign_asset_is_sprite,
+            prompt="Assign this asset to the clicked control?",
+        )
+
+    def _offer_link_asset_to_control(
+        self,
+        control: Control,
+        asset,
+        is_sprite: bool,
+        *,
+        prompt: str | None = None,
+    ) -> None:
+        dlg = LinkAssetDialog(control, asset, self, prompt=prompt)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            self._log_panel.append_log("Asset link cancelled.")
+            return
+        self._link_asset_to_control(control, asset, is_sprite)
+        self._clear_assign_mode()
+        self._mark_live_dirty()
+
+    def _clear_assign_mode(self) -> None:
+        self._assign_asset_id = None
+        self._assign_asset_is_sprite = False
+        self._canvas.set_assign_mode(False)
+
     def _on_asset_dropped(
         self,
         asset_id: str,
@@ -647,12 +725,12 @@ class MainWindow(QMainWindow):
             target = next((c for c in screen.controls if c.id == target_control_id), None)
             if target is None:
                 return
-            dlg = LinkAssetDialog(target, asset, self)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
-                self._log_panel.append_log("Asset link cancelled.")
-                return
-            self._link_asset_to_control(target, asset, is_sprite)
-            self._mark_live_dirty()
+            self._offer_link_asset_to_control(
+                target,
+                asset,
+                is_sprite,
+                prompt="Drop detected on an existing control. Link this asset?",
+            )
             return
 
         idx = self._palette.currentIndex()
