@@ -12,6 +12,18 @@ from PIL import Image
 from juce_theme_studio.core.types import SpriteLayout
 
 
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
 @dataclass
 class SpriteConfig:
     """Configuration for slicing and mapping sprite sheet frames."""
@@ -93,9 +105,9 @@ class SpriteConfig:
             rows=int(data.get("rows", 1)),
             state_names=list(data.get("state_names", [])),
             default_frame=int(data.get("default_frame", 0)),
-            hover_frame=data.get("hover_frame"),
-            active_frame=data.get("active_frame"),
-            disabled_frame=data.get("disabled_frame"),
+            hover_frame=_optional_int(data.get("hover_frame")),
+            active_frame=_optional_int(data.get("active_frame")),
+            disabled_frame=_optional_int(data.get("disabled_frame")),
             min_value=float(data.get("min_value", 0.0)),
             max_value=float(data.get("max_value", 1.0)),
             bipolar=bool(data.get("bipolar", False)),
@@ -110,8 +122,8 @@ class SpriteConfig:
             warning_db=float(data.get("warning_db", -6.0)),
             clip_db=float(data.get("clip_db", 0.0)),
             slider_orientation=str(data.get("slider_orientation", "horizontal")),
-            track_asset_id=data.get("track_asset_id"),
-            thumb_asset_id=data.get("thumb_asset_id"),
+            track_asset_id=_optional_str(data.get("track_asset_id")),
+            thumb_asset_id=_optional_str(data.get("thumb_asset_id")),
         )
 
 
@@ -135,8 +147,8 @@ def extract_frame(
     frame_index: int,
 ) -> Image.Image:
     """Extract a single frame from a sprite sheet."""
-    with Image.open(image_path) as img:
-        img = img.convert("RGBA")
+    with Image.open(image_path) as source_img:
+        img = source_img.convert("RGBA")
         x, y = frame_position(config, frame_index)
         box = (x, y, x + config.frame_width, y + config.frame_height)
         return img.crop(box).copy()

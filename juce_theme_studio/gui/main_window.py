@@ -128,8 +128,12 @@ class MainWindow(QMainWindow):
         fit_act.triggered.connect(self._fit_canvas)
         tb.addAction(fit_act)
 
-        tb.addAction(QAction("Settings", self, triggered=self._show_settings))
-        tb.addAction(QAction("Commit", self, triggered=self._commit))
+        settings_act = QAction("Settings", self)
+        settings_act.triggered.connect(self._show_settings)
+        tb.addAction(settings_act)
+        commit_act = QAction("Commit", self)
+        commit_act.triggered.connect(self._commit)
+        tb.addAction(commit_act)
 
         save_act = tb.actions()[1]
         save_act.setShortcut(QKeySequence.StandardKey.Save)
@@ -539,6 +543,8 @@ class MainWindow(QMainWindow):
             self._log_panel.append_log(f"Background set to {asset.name}")
 
     def _sprite_config_for_asset(self, asset) -> SpriteConfig | None:
+        if self._project is None:
+            return None
         if asset.sprite_config:
             return SpriteConfig.from_dict(asset.sprite_config)
         path = resolve_asset_path(self._project.root, asset)

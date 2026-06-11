@@ -55,9 +55,9 @@ def validate_manifest(manifest: ThemeManifest, project_root: Path) -> Validation
     if not studio_dir.is_dir():
         report.add("warning", "Studio directory does not exist yet; it will be created on save.")
 
-    for asset in manifest.assets:
-        if not asset_exists(project_root, asset):
-            report.add("error", f"Missing asset file: {asset.relative_path}")
+    for asset_entry in manifest.assets:
+        if not asset_exists(project_root, asset_entry):
+            report.add("error", f"Missing asset file: {asset_entry.relative_path}")
 
     if not manifest.screens:
         report.add("warning", "No screens defined in project.")
@@ -78,10 +78,10 @@ def validate_manifest(manifest: ThemeManifest, project_root: Path) -> Validation
             names_seen[control.name] = control.id
 
             if control.asset_id:
-                asset = manifest.get_asset(control.asset_id)
-                if asset is None:
+                control_asset = manifest.get_asset(control.asset_id)
+                if control_asset is None:
                     report.add("error", "Control references unknown asset.", screen.id, control.id)
-                elif not asset_exists(project_root, asset):
+                elif not asset_exists(project_root, control_asset):
                     report.add("error", "Broken asset path for control.", screen.id, control.id)
 
             if control.sprite_config:

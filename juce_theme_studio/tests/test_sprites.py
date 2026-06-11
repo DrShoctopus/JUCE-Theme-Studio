@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from PIL import Image
 
@@ -53,7 +54,7 @@ def test_extract_frame(tmp_path: Path) -> None:
     )
     frame = extract_frame(path, cfg, 2)
     assert frame.size == (64, 64)
-    assert frame.getpixel((32, 32))[0] == 255
+    assert cast(tuple[int, ...], frame.getpixel((32, 32)))[0] == 255
 
 
 def test_detect_sprite_grid(tmp_path: Path) -> None:
