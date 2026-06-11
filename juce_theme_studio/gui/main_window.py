@@ -34,6 +34,7 @@ from juce_theme_studio.core.alignment import (
     distribute_vertically,
 )
 from juce_theme_studio.core.assets import import_asset, import_project_assets, resolve_asset_path
+from juce_theme_studio.core.auto_link import auto_link_project_assets
 from juce_theme_studio.core.controls import Control, create_control
 from juce_theme_studio.core.manifest import ThemeManifest
 from juce_theme_studio.core.mapping import sync_scan_mappings
@@ -336,6 +337,7 @@ class MainWindow(QMainWindow):
                 msg += f" ({self._project.mappings_added} mapping(s) from scanner)"
             self._log_panel.append_log(msg)
             self._offer_import_project_assets()
+            self._try_auto_link_assets(silent=True)
         except Exception as exc:
             QMessageBox.critical(self, "Error", str(exc))
             logger.exception("Failed to open project")
@@ -441,7 +443,8 @@ class MainWindow(QMainWindow):
             self,
             "Import project assets",
             f"Found {len(images)} image(s) in this JUCE project.\n\n"
-            "Copy them into the asset library now? (Original files are not modified.)",
+            "Copy them into the asset library and link them to detected controls?\n"
+            "(Original files are not modified.)",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -470,19 +473,51 @@ class MainWindow(QMainWindow):
         if imported:
             for entry in imported:
                 self._log_panel.append_log(f"Imported from project: {entry.name}")
+            linked = self._try_auto_link_assets(silent=True)
             self._refresh_ui()
             if not silent:
-                QMessageBox.information(
-                    self,
-                    "Import complete",
-                    f"Copied {len(imported)} asset(s) into the library.",
-                )
+                detail = f"Copied {len(imported)} asset(s) into the library."
+                if linked:
+                    detail += f"\nAuto-linked {linked} asset(s) to controls."
+                else:
+                    detail += (
+                        "\n\nControls without images are placeholders — drag assets "
+                        "from the library onto them, or use Link Asset to Control."
+                    )
+                QMessageBox.information(self, "Import complete", detail)
         elif not silent:
-            QMessageBox.information(
-                self,
-                "Already imported",
-                "All project images are already in the asset library.",
+            linked = self._try_auto_link_assets(silent=True)
+            self._refresh_ui()
+            msg = "All project images are already in the asset library."
+            if linked:
+                msg += f"\nAuto-linked {linked} asset(s) to controls."
+            QMessageBox.information(self, "Already imported", msg)
+
+    def _try_auto_link_assets(self, *, silent: bool = False) -> int:
+        if not self._project or not self._project.manifest.assets:
+            return 0
+        linked = auto_link_project_assets(self._project.manifest, self._project.root)
+        if linked:
+            screen = self._current_screen()
+            if screen:
+                self._scene.load_screen(screen)
+            else:
+                self._scene.refresh_all()
+            self._log_panel.append_log(f"Auto-linked {linked} asset(s) to controls.")
+            report = validate_manifest(self._project.manifest, self._project.root)
+            self._log_panel.set_validation(report)
+        elif not silent:
+            unlinked = sum(
+                1
+                for s in self._project.manifest.screens
+                for c in s.controls
+                if not c.asset_id and c.control_type != ControlType.LABEL
             )
+            if unlinked:
+                self._log_panel.append_log(
+                    f"{unlinked} control(s) still need assets — drag from the Asset Library."
+                )
+        return linked
 
     def _import_sprite_sheet(self) -> None:
         if not self._project:

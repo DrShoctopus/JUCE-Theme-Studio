@@ -99,6 +99,20 @@ def is_asset_imported(manifest: ThemeManifest, project_root: Path, source: str |
     return False
 
 
+def _looks_like_sprite_sheet(source: Path) -> bool:
+    """Heuristic: filename or multi-frame layout suggests a sprite sheet."""
+    name = source.stem.lower()
+    if any(keyword in name for keyword in ("strip", "sprite", "spritesheet", "frames", "atlas")):
+        return True
+    try:
+        from juce_theme_studio.core.sprite_detect import detect_sprite_sheet
+
+        result = detect_sprite_sheet(source)
+        return result.frame_count > 1
+    except Exception:
+        return False
+
+
 def import_project_assets(
     manifest: ThemeManifest,
     project_root: Path,
@@ -121,6 +135,7 @@ def import_project_assets(
             project_root,
             source,
             name=source.stem,
+            is_sprite_sheet=_looks_like_sprite_sheet(source),
         )
         imported.append(entry)
 

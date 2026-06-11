@@ -7,6 +7,23 @@ from juce_theme_studio.core.mapping import apply_scanned_mappings, sync_scan_map
 from juce_theme_studio.juce.scanner import DetectedControl, DetectedScreen, ScanResult
 
 
+def test_apply_scanned_mappings_uses_setbounds() -> None:
+    screen = Screen(id="s1", name="Main", juce_component="MainComponent")
+    detected = DetectedScreen(
+        id="d1",
+        name="MainComponent",
+        class_name="MainComponent",
+        source_file="Source/MainComponent.cpp",
+        controls=[
+            DetectedControl("gainSlider", "juce::Slider", 10, 100, 200, 64, 64),
+        ],
+    )
+    apply_scanned_mappings(screen, detected)
+    assert screen.controls[0].x == 100
+    assert screen.controls[0].y == 200
+    assert screen.controls[0].width == 64
+
+
 def test_apply_scanned_mappings() -> None:
     screen = Screen(id="s1", name="Main", juce_component="MainComponent")
     detected = DetectedScreen(

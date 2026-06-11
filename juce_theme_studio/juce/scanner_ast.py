@@ -11,6 +11,7 @@ from juce_theme_studio.juce.scanner import (
     DetectedControl,
     DetectedScreen,
     _guess_canvas_size,
+    _merge_bounds_into_controls,
     _read_source_bundle,
     _rel,
 )
@@ -123,6 +124,8 @@ def _analyze_treesitter(path: Path, root: Path, text: str) -> DetectedScreen | N
     if not class_name:
         return None
 
+    controls = _dedupe_controls(controls)
+    _merge_bounds_into_controls(controls, text)
     width, height = _guess_canvas_size(text)
     return DetectedScreen(
         id=uuid.uuid4().hex[:12],
@@ -131,7 +134,7 @@ def _analyze_treesitter(path: Path, root: Path, text: str) -> DetectedScreen | N
         source_file=_rel(path, root),
         suggested_width=width,
         suggested_height=height,
-        controls=_dedupe_controls(controls),
+        controls=controls,
         confidence=0.9,
     )
 
@@ -185,6 +188,8 @@ def _analyze_libclang(path: Path, root: Path, text: str) -> DetectedScreen | Non
     if not class_name:
         return None
 
+    controls = _dedupe_controls(controls)
+    _merge_bounds_into_controls(controls, text)
     width, height = _guess_canvas_size(text)
     return DetectedScreen(
         id=uuid.uuid4().hex[:12],
@@ -193,7 +198,7 @@ def _analyze_libclang(path: Path, root: Path, text: str) -> DetectedScreen | Non
         source_file=_rel(path, root),
         suggested_width=width,
         suggested_height=height,
-        controls=_dedupe_controls(controls),
+        controls=controls,
         confidence=0.95,
     )
 

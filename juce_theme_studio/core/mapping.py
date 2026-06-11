@@ -27,13 +27,15 @@ def apply_scanned_mappings(screen: Screen, detected: DetectedScreen) -> int:
         if det.cpp_variable in existing_vars:
             continue
         ctype = _JUCE_TYPE_MAP.get(det.juce_class, ControlType.STATIC_IMAGE)
+        default_w = 64 if ctype != ControlType.LABEL else 120
+        default_h = 64 if ctype != ControlType.LABEL else 24
         control = create_control(
             ctype,
             det.cpp_variable,
-            x=50 + (idx % 5) * 70,
-            y=50 + (idx // 5) * 70,
-            width=64 if ctype != ControlType.LABEL else 120,
-            height=64 if ctype != ControlType.LABEL else 24,
+            x=det.x if det.x is not None else 50 + (idx % 5) * 70,
+            y=det.y if det.y is not None else 50 + (idx // 5) * 70,
+            width=det.width if det.width is not None else default_w,
+            height=det.height if det.height is not None else default_h,
         )
         control.mapping = ControlMapping(
             juce_class=det.juce_class,

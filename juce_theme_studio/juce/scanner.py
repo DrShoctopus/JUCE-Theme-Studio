@@ -31,11 +31,20 @@ COMPONENT_BASE_PATTERN = re.compile(
 )
 
 
+SETBOUNDS_PATTERN = re.compile(
+    r"(\w+)\.setBounds\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)"
+)
+
+
 @dataclass
 class DetectedControl:
     cpp_variable: str
     juce_class: str
     line_number: int
+    x: int | None = None
+    y: int | None = None
+    width: int | None = None
+    height: int | None = None
 
 
 @dataclass
@@ -173,6 +182,7 @@ def _analyze_cpp_file(path: Path, root: Path) -> DetectedScreen | None:
     confidence = min(1.0, confidence + indicator_hits * 0.02)
 
     controls = _extract_controls(text)
+    _merge_bounds_into_controls(controls, text)
 
     width, height = _guess_canvas_size(text)
 
@@ -186,6 +196,20 @@ def _analyze_cpp_file(path: Path, root: Path) -> DetectedScreen | None:
         controls=controls,
         confidence=confidence,
     )
+
+
+def _merge_bounds_into_controls(controls: list[DetectedControl], text: str) -> None:
+    """Apply setBounds(x, y, w, h) positions from resized() to detected controls."""
+    by_var = {c.cpp_variable: c for c in controls}
+    for match in SETBOUNDS_PATTERN.finditer(text):
+        var = match.group(1)
+        control = by_var.get(var)
+        if control is None:
+            continue
+        control.x = int(match.group(2))
+        control.y = int(match.group(3))
+        control.width = int(match.group(4))
+        control.height = int(match.group(5))
 
 
 def _extract_controls(text: str) -> list[DetectedControl]:
