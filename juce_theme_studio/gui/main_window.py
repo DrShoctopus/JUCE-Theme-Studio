@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -208,6 +209,7 @@ class MainWindow(QMainWindow):
         sl.addWidget(QLabel("Screens"))
         self._screen_list = QListWidget()
         self._screen_list.currentRowChanged.connect(self._on_screen_selected)
+        self._screen_list.itemClicked.connect(self._on_screen_item_clicked)
         sl.addWidget(self._screen_list)
         row = QHBoxLayout()
         row.addWidget(self._btn("New Screen", self._new_screen))
@@ -368,11 +370,14 @@ class MainWindow(QMainWindow):
         self._scene.snap_to_grid = m.snap_to_grid
         self._scene.grid_size = m.grid_size
 
+        self._screen_list.blockSignals(True)
         self._screen_list.clear()
         for screen in m.screens:
             tag = " (manual)" if screen.manual else ""
             src = f" [{screen.juce_component}]" if screen.juce_component else ""
-            self._screen_list.addItem(f"{screen.name}{src}{tag}")
+            item = QListWidgetItem(f"{screen.name}{src}{tag}")
+            item.setData(Qt.ItemDataRole.UserRole, screen.id)
+            self._screen_list.addItem(item)
 
         self._asset_list.set_assets(m.assets)
 
@@ -382,14 +387,25 @@ class MainWindow(QMainWindow):
                 if s.id == m.last_opened_screen_id:
                     idx = i
                     break
+        self._screen_list.blockSignals(False)
         if m.screens:
             self._screen_list.setCurrentRow(idx)
+            # QListWidget may already be on row 0 after repopulating, so currentRowChanged
+            # does not fire — always load the selected screen explicitly.
+            self._load_screen_at_row(idx)
 
         self._refresh_git_status()
         report = validate_manifest(m, self._project.root)
         self._log_panel.set_validation(report)
 
     def _on_screen_selected(self, row: int) -> None:
+        self._load_screen_at_row(row)
+
+    def _on_screen_item_clicked(self, item: QListWidgetItem) -> None:
+        # Clicking the already-selected row does not emit currentRowChanged.
+        self._load_screen_at_row(self._screen_list.row(item))
+
+    def _load_screen_at_row(self, row: int) -> None:
         if not self._project or row < 0 or row >= len(self._project.manifest.screens):
             return
         screen = self._project.manifest.screens[row]
@@ -424,7 +440,9 @@ class MainWindow(QMainWindow):
                 h = 600
             create_manual_screen(self._project.manifest, name, w, h)
             self._refresh_ui()
-            self._screen_list.setCurrentRow(len(self._project.manifest.screens) - 1)
+            new_idx = len(self._project.manifest.screens) - 1
+            self._screen_list.setCurrentRow(new_idx)
+            self._load_screen_at_row(new_idx)
 
     def _import_asset(self) -> None:
         if not self._project:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QPixmap,
     QWheelEvent,
 )
+from PySide6.QtGui import QResizeEvent, QShowEvent
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene, QGraphicsView
 
 from juce_theme_studio.core.assets import resolve_asset_path
@@ -55,7 +56,9 @@ class CanvasScene(QGraphicsScene):
         self._items.clear()
         self._bg_item = None
 
-        self._border = QGraphicsRectItem(0, 0, screen.canvas_width, screen.canvas_height)
+        canvas_w = max(screen.canvas_width, 100)
+        canvas_h = max(screen.canvas_height, 100)
+        self._border = QGraphicsRectItem(0, 0, canvas_w, canvas_h)
         self._border.setPen(QPen(QColor(60, 60, 60), 2))
         self._border.setBrush(QBrush(QColor(30, 30, 30)))
         self._border.setZValue(-1000)
@@ -70,8 +73,8 @@ class CanvasScene(QGraphicsScene):
                         with Image.open(path) as img:
                             qimg = ImageQt(img.convert("RGBA"))
                         pix = QPixmap.fromImage(qimg).scaled(
-                            screen.canvas_width,
-                            screen.canvas_height,
+                            canvas_w,
+                            canvas_h,
                             Qt.AspectRatioMode.IgnoreAspectRatio,
                             Qt.TransformationMode.SmoothTransformation,
                         )
@@ -84,7 +87,7 @@ class CanvasScene(QGraphicsScene):
         for control in sorted(screen.controls, key=lambda c: c.z_index):
             self._add_control_item(control)
 
-        self.setSceneRect(-50, -50, screen.canvas_width + 100, screen.canvas_height + 100)
+        self.setSceneRect(-50, -50, canvas_w + 100, canvas_h + 100)
 
     def _add_control_item(self, control: Control) -> ControlGraphicsItem:
         item = ControlGraphicsItem(
@@ -239,6 +242,7 @@ class CanvasView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setAcceptDrops(True)
         self._zoom = 1.0
+        self._pending_fit = False
 
     def _apply_zoom(self, zoom: float) -> None:
         self._zoom = zoom
@@ -287,6 +291,16 @@ class CanvasView(QGraphicsView):
         event.accept()
 
     def fit_canvas(self) -> None:
+        if self.viewport().width() < 2 or self.viewport().height() < 2:
+            self._pending_fit = True
+            QTimer.singleShot(0, self._perform_fit)
+            return
+        self._perform_fit()
+
+    def _perform_fit(self) -> None:
+        if self.viewport().width() < 2 or self.viewport().height() < 2:
+            self._pending_fit = True
+            return
         scene = self.scene()
         if scene and scene.sceneRect().isValid():
             self.resetTransform()
