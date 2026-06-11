@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "juce-theme-studio"
+version = "0.1.0"
+description = "GUI editor for designing, previewing, and exporting JUCE plugin themes"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "JUCE Theme Studio" }]
+dependencies = [
+    "PySide6>=6.6",
+    "Pillow>=10.0",
+    "GitPython>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.4",
+    "mypy>=1.8",
+]
+
+[project.scripts]
+juce-theme-studio = "juce_theme_studio.app.main:main"
+
+[tool.setuptools]
+package-dir = { "juce_theme_studio" = "." }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["juce_theme_studio*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Headless CI: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -p pytest
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
