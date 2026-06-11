@@ -159,7 +159,19 @@ pip install -e ".[clang]"     # libclang
 
 ## Drag-and-drop
 
-Drag assets from the **Asset Library** onto the canvas to place controls at the drop position.
+Drag assets from the **Asset Library** onto the canvas:
+
+- **Empty area** — creates a new control (type from Control Palette) at the drop position.
+- **Existing placeholder** — a **Link Asset to Control** dialog appears showing the C++ variable, JUCE class, and asset name. Choose **Link** or **Cancel**.
+
+## Sprite sheet → multiple library assets
+
+When importing a sprite sheet, the configuration dialog offers:
+
+- **Slice all frames into asset library** — each frame saved as its own PNG (`name_frame_00`, `name_frame_01`, …).
+- **Also keep full sprite sheet in library** — retains the master strip for strip-based controls.
+
+Use sliced frames for single-state images (LEDs, decals); keep the full sheet for knobs and meters.
 
 ## Theme diff
 

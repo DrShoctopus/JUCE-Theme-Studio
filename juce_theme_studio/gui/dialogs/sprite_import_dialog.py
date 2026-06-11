@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -69,12 +70,30 @@ class SpriteImportDialog(QDialog):
         form.addRow("Columns (grid)", self._columns)
 
         layout.addLayout(form)
+
+        self._slice_frames = QCheckBox("Slice all frames into asset library")
+        self._slice_frames.setChecked(True)
+        self._slice_frames.setToolTip(
+            "Each frame is saved as a separate image in the asset library."
+        )
+        layout.addWidget(self._slice_frames)
+
+        self._keep_sheet = QCheckBox("Also keep full sprite sheet in library")
+        self._keep_sheet.setChecked(True)
+        layout.addWidget(self._keep_sheet)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def slice_into_library(self) -> bool:
+        return self._slice_frames.isChecked()
+
+    def keep_full_sheet(self) -> bool:
+        return self._keep_sheet.isChecked()
 
     def sprite_config(self) -> SpriteConfig:
         layout = self._layout.currentData()

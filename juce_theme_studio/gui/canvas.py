@@ -123,6 +123,13 @@ class CanvasScene(QGraphicsScene):
         selected = self.get_selected_controls()
         return selected[0] if selected else None
 
+    def control_at(self, scene_pos: QPointF) -> Control | None:
+        """Return topmost control under a scene position (for drop linking)."""
+        for item in self.items(scene_pos):
+            if isinstance(item, ControlGraphicsItem):
+                return item.control
+        return None
+
     def snap_control(self, control: Control, x: float, y: float):
         if self.screen is None:
             from juce_theme_studio.core.snap import SnapResult
@@ -202,7 +209,8 @@ class CanvasScene(QGraphicsScene):
 
 
 class CanvasView(QGraphicsView):
-    asset_dropped = Signal(str, int, int, bool)  # asset_id, x, y, is_sprite
+    # asset_id, x, y, is_sprite, target_control_id (empty = new control)
+    asset_dropped = Signal(str, int, int, bool, str)
 
     def __init__(self, scene: CanvasScene) -> None:
         super().__init__(scene)
@@ -232,7 +240,13 @@ class CanvasView(QGraphicsView):
         asset_id = bytes(mime.data(MIME_ASSET_ID)).decode("utf-8")
         is_sprite = mime.hasFormat(MIME_ASSET_SPRITE) and mime.data(MIME_ASSET_SPRITE) == b"1"
         pos = self.mapToScene(event.position().toPoint())
-        self.asset_dropped.emit(asset_id, int(pos.x()), int(pos.y()), is_sprite)
+        target_id = ""
+        scene = self.scene()
+        if isinstance(scene, CanvasScene):
+            target = scene.control_at(pos)
+            if target is not None:
+                target_id = target.id
+        self.asset_dropped.emit(asset_id, int(pos.x()), int(pos.y()), is_sprite, target_id)
         event.acceptProposedAction()
 
     def wheelEvent(self, event: QWheelEvent) -> None:

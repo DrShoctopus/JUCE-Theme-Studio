@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -43,6 +44,7 @@ from juce_theme_studio.core.project import (
     rescan_mappings,
     save_project,
 )
+from juce_theme_studio.core.sprite_slicer import slice_sprite_sheet_to_library
 from juce_theme_studio.core.sprites import PreviewState, SpriteConfig, detect_sprite_grid
 from juce_theme_studio.core.types import ControlType
 from juce_theme_studio.core.undo import CallableCommand, UndoStack
@@ -50,6 +52,7 @@ from juce_theme_studio.core.validation import validate_manifest
 from juce_theme_studio.git_tools.git import get_status
 from juce_theme_studio.gui.canvas import CanvasScene, CanvasView
 from juce_theme_studio.gui.dialogs.export_preview_dialog import ExportPreviewDialog
+from juce_theme_studio.gui.dialogs.link_asset_dialog import LinkAssetDialog
 from juce_theme_studio.gui.dialogs.settings_dialog import SettingsDialog
 from juce_theme_studio.gui.dialogs.sprite_import_dialog import SpriteImportDialog
 from juce_theme_studio.gui.dialogs.theme_diff_dialog import ThemeDiffDialog
@@ -431,19 +434,35 @@ class MainWindow(QMainWindow):
             return
         p = Path(path)
         dlg = SpriteImportDialog(p, self)
-        sprite_cfg = None
-        if dlg.exec():
-            sprite_cfg = dlg.sprite_config()
+        if not dlg.exec():
+            return
 
-        entry = import_asset(
-            self._project.manifest,
-            self._project.root,
-            p,
-            is_sprite_sheet=True,
-        )
-        if sprite_cfg:
+        sprite_cfg = dlg.sprite_config()
+        slice_frames = dlg.slice_into_library()
+        keep_sheet = dlg.keep_full_sheet()
+
+        if slice_frames:
+            sliced = slice_sprite_sheet_to_library(
+                self._project.manifest,
+                self._project.root,
+                p,
+                sprite_cfg,
+                base_name=p.stem,
+            )
+            self._log_panel.append_log(
+                f"Sliced {len(sliced)} frame(s) into asset library."
+            )
+
+        if keep_sheet or not slice_frames:
+            entry = import_asset(
+                self._project.manifest,
+                self._project.root,
+                p,
+                is_sprite_sheet=True,
+            )
             entry.sprite_config = sprite_cfg.to_dict()
-        self._log_panel.append_log(f"Imported sprite sheet: {entry.name}")
+            self._log_panel.append_log(f"Imported sprite sheet: {entry.name}")
+
         self._refresh_ui()
 
     def _set_background(self) -> None:
@@ -524,12 +543,35 @@ class MainWindow(QMainWindow):
     def _mark_live_dirty(self) -> None:
         self._live_preview.mark_dirty()
 
-    def _on_asset_dropped(self, asset_id: str, x: int, y: int, is_sprite: bool) -> None:
+    def _on_asset_dropped(
+        self,
+        asset_id: str,
+        x: int,
+        y: int,
+        is_sprite: bool,
+        target_control_id: str = "",
+    ) -> None:
         if not self._project or not self._current_screen_id:
             return
         asset = self._project.manifest.get_asset(asset_id)
         if asset is None:
             return
+
+        if target_control_id:
+            screen = self._current_screen()
+            if not screen:
+                return
+            target = next((c for c in screen.controls if c.id == target_control_id), None)
+            if target is None:
+                return
+            dlg = LinkAssetDialog(target, asset, self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                self._log_panel.append_log("Asset link cancelled.")
+                return
+            self._link_asset_to_control(target, asset, is_sprite)
+            self._mark_live_dirty()
+            return
+
         idx = self._palette.currentIndex()
         ctype, label = CONTROL_PALETTE[idx]
         use_sprite = is_sprite or asset.is_sprite_sheet
@@ -546,6 +588,35 @@ class MainWindow(QMainWindow):
         control.mapping.screen_name = screen.name
         self._push_add_control(control)
         self._mark_live_dirty()
+
+    def _link_asset_to_control(self, control: Control, asset, is_sprite: bool) -> None:
+        use_sprite = is_sprite or asset.is_sprite_sheet
+        sprite_config = self._sprite_config_for_asset(asset) if use_sprite else None
+        before_asset = control.asset_id
+        before_sprite = (
+            control.sprite_config.to_dict() if control.sprite_config else None
+        )
+
+        def do():
+            control.asset_id = asset.id
+            if use_sprite:
+                control.sprite_config = sprite_config
+            self._scene.refresh_all()
+            self._scene.select_control(control.id)
+            self._properties.set_control(control)
+
+        def undo():
+            control.asset_id = before_asset
+            control.sprite_config = (
+                SpriteConfig.from_dict(before_sprite) if before_sprite else None
+            )
+            self._scene.refresh_all()
+            self._scene.select_control(control.id)
+            self._properties.set_control(control)
+
+        self._undo.push(CallableCommand(do, undo))
+        label = control.mapping.cpp_variable or control.name
+        self._log_panel.append_log(f"Linked asset '{asset.name}' → control '{label}'.")
 
     def _toggle_preview(self, checked: bool) -> None:
         self._preview_mode = checked
