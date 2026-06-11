@@ -20,6 +20,8 @@ class LinkAssetDialog(QDialog):
         control: Control,
         asset: AssetEntry,
         parent=None,
+        *,
+        prompt: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Link Asset to Control")
@@ -28,7 +30,7 @@ class LinkAssetDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
-                "Drop detected on an existing control. Link this asset to the placeholder?"
+                prompt or "Link this asset to the selected control?",
             )
         )
 

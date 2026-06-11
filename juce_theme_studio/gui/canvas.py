@@ -34,6 +34,7 @@ from juce_theme_studio.gui.widgets.asset_list import MIME_ASSET_ID, MIME_ASSET_S
 class CanvasScene(QGraphicsScene):
     selection_changed = Signal(object)  # Control | None
     control_moved = Signal(str)
+    control_clicked = Signal(str)  # control id
 
     def __init__(self, manifest: ThemeManifest, project_root: Path) -> None:
         super().__init__()
@@ -98,6 +99,7 @@ class CanvasScene(QGraphicsScene):
             self.button_preview_state,
         )
         item.geometry_changed.connect(self.control_moved.emit)
+        item.clicked.connect(self.control_clicked.emit)
         self.addItem(item)
         self._items[control.id] = item
         return item
@@ -243,6 +245,15 @@ class CanvasView(QGraphicsView):
         self.setAcceptDrops(True)
         self._zoom = 1.0
         self._pending_fit = False
+        self._assign_mode = False
+
+    def set_assign_mode(self, active: bool) -> None:
+        self._assign_mode = active
+        cursor = (
+            Qt.CursorShape.CrossCursor if active else Qt.CursorShape.ArrowCursor
+        )
+        self.setCursor(cursor)
+        self.viewport().setCursor(cursor)
 
     def _apply_zoom(self, zoom: float) -> None:
         self._zoom = zoom

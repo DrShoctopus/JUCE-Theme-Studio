@@ -26,6 +26,7 @@ class ControlGraphicsItem(QGraphicsObject):
     """Draggable, resizable control on the canvas."""
 
     geometry_changed = Signal(str)
+    clicked = Signal(str)  # control id
 
     HANDLE_SIZE = 8
 
@@ -205,6 +206,8 @@ class ControlGraphicsItem(QGraphicsObject):
             event.accept()
             return
         super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton and not self._resizing:
+            self.clicked.emit(self.control.id)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
         if self._resizing and self._drag_start and self._orig_geom:
