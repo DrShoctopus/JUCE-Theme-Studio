@@ -9,11 +9,13 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QLabel,
     QSpinBox,
     QVBoxLayout,
 )
 
-from juce_theme_studio.core.sprites import SpriteConfig, detect_sprite_grid
+from juce_theme_studio.core.sprite_detect import detect_sprite_sheet, opencv_available
+from juce_theme_studio.core.sprites import SpriteConfig
 from juce_theme_studio.core.types import SpriteLayout
 
 
@@ -21,14 +23,31 @@ class SpriteImportDialog(QDialog):
     def __init__(self, image_path: Path, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Sprite Sheet Configuration")
-        fw, fh, fc, cols = detect_sprite_grid(image_path)
+        detected = detect_sprite_sheet(image_path)
+        fw = detected.frame_width
+        fh = detected.frame_height
+        fc = detected.frame_count
+        cols = detected.columns
 
         layout = QVBoxLayout(self)
+        method = "OpenCV" if detected.method == "opencv" else "Pillow"
+        hint = f"Auto-detected via {method}"
+        if not opencv_available():
+            hint += " (pip install opencv-python-headless for vision extras)"
+        layout.addWidget(QLabel(hint))
         form = QFormLayout()
 
         self._layout = QComboBox()
         for sl in SpriteLayout:
             self._layout.addItem(sl.value.replace("_", " ").title(), sl)
+        slayout = (
+            SpriteLayout(detected.layout)
+            if detected.layout in {s.value for s in SpriteLayout}
+            else SpriteLayout.HORIZONTAL_STRIP
+        )
+        layout_idx = self._layout.findData(slayout)
+        if layout_idx >= 0:
+            self._layout.setCurrentIndex(layout_idx)
         form.addRow("Layout", self._layout)
 
         self._frame_w = QSpinBox()

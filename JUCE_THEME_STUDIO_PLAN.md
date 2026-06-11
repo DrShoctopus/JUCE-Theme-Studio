@@ -54,10 +54,10 @@ juce-theme-studio
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest
 ```
 
-## Future improvements
+## Phase 8 — Advanced Features ✅
 
-- tree-sitter-cpp / libclang for precise C++ mapping
-- OpenCV-assisted sprite frame detection
-- Live JUCE plugin preview bridge
-- Theme diff across versions
-- Drag-and-drop assets onto canvas
+- [x] tree-sitter-cpp + libclang optional C++ scanners (`juce/scanner_ast.py`)
+- [x] OpenCV sprite auto-slice with Pillow fallback (`core/sprite_detect.py`)
+- [x] Drag-and-drop assets onto canvas (`gui/widgets/asset_list.py`)
+- [x] Theme version diffing (`core/theme_diff.py`, `ThemeDiffDialog`)
+- [x] Live JUCE preview bridge + `examples/juce_live_preview/` companion app

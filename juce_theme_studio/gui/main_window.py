@@ -52,13 +52,18 @@ from juce_theme_studio.gui.canvas import CanvasScene, CanvasView
 from juce_theme_studio.gui.dialogs.export_preview_dialog import ExportPreviewDialog
 from juce_theme_studio.gui.dialogs.settings_dialog import SettingsDialog
 from juce_theme_studio.gui.dialogs.sprite_import_dialog import SpriteImportDialog
+from juce_theme_studio.gui.dialogs.theme_diff_dialog import ThemeDiffDialog
 from juce_theme_studio.gui.panels.export_panel import ExportPanel
 from juce_theme_studio.gui.panels.git_panel import GitCommitDialog
 from juce_theme_studio.gui.panels.layers_panel import LayersPanel
+from juce_theme_studio.gui.panels.live_preview_panel import LivePreviewPanel
 from juce_theme_studio.gui.panels.log_panel import LogPanel
 from juce_theme_studio.gui.panels.properties_panel import PropertiesPanel
 from juce_theme_studio.gui.panels.screen_panel import ScreenPanel
+from juce_theme_studio.gui.widgets.asset_list import AssetListWidget
 from juce_theme_studio.juce.exporter import export_theme
+from juce_theme_studio.juce.preview_bridge import LivePreviewBridge
+from juce_theme_studio.juce.scanner_ast import libclang_available, treesitter_available
 
 logger = logging.getLogger("juce_theme_studio")
 
@@ -92,6 +97,7 @@ class MainWindow(QMainWindow):
         self._undo = UndoStack()
         self._clipboard: list[Control] = []
         self._preview_mode = False
+        self._live_preview = LivePreviewBridge(self)
 
         self._build_toolbar()
         self._build_menus()
@@ -171,6 +177,10 @@ class MainWindow(QMainWindow):
         project_menu = self.menuBar().addMenu("Project")
         project_menu.addAction("Sync JUCE Mappings", self._sync_mappings)
         project_menu.addAction("Rescan Project", self._rescan_project)
+        project_menu.addAction("Theme Diff…", self._show_theme_diff)
+
+        tools_menu = self.menuBar().addMenu("Tools")
+        tools_menu.addAction("Theme Diff…", self._show_theme_diff)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -194,7 +204,7 @@ class MainWindow(QMainWindow):
         assets_box = QWidget()
         al = QVBoxLayout(assets_box)
         al.addWidget(QLabel("Asset Library"))
-        self._asset_list = QListWidget()
+        self._asset_list = AssetListWidget()
         al.addWidget(self._asset_list)
         al.addWidget(self._btn("Import Asset", self._import_asset))
         al.addWidget(self._btn("Import Sprite Sheet", self._import_sprite_sheet))
@@ -215,6 +225,8 @@ class MainWindow(QMainWindow):
         self._scene = CanvasScene(ThemeManifest(), Path("."))
         self._canvas = CanvasView(self._scene)
         self._scene.selectionChanged.connect(self._on_canvas_selection)
+        self._scene.control_moved.connect(lambda _cid: self._mark_live_dirty())
+        self._canvas.asset_dropped.connect(self._on_asset_dropped)
 
         right = QSplitter(Qt.Orientation.Vertical)
         self._screen_panel = ScreenPanel()
@@ -245,6 +257,9 @@ class MainWindow(QMainWindow):
         pvl.addWidget(QLabel("Button state"))
         pvl.addWidget(self._btn_state)
         right.addWidget(preview_box)
+
+        self._live_panel = LivePreviewPanel(self._live_preview)
+        right.addWidget(self._live_panel)
         right.setMaximumWidth(340)
 
         h_split = QSplitter()
@@ -296,10 +311,19 @@ class MainWindow(QMainWindow):
             self._scene.manifest = self._project.manifest
             self._scene.project_root = self._project.root
             self._export_panel.set_manifest(self._project.manifest)
+            self._live_preview.configure(self._project.root, self._project.manifest)
+            binary = LivePreviewBridge.find_bundled_preview(self._project.root)
+            self._live_panel.set_suggested_binary(binary)
             self._refresh_ui()
-            msg = f"Opened project: {path}"
+            parsers = []
+            if treesitter_available():
+                parsers.append("tree-sitter-cpp")
+            if libclang_available():
+                parsers.append("libclang")
+            parser_note = f" [parsers: {', '.join(parsers) or 'regex fallback'}]"
+            msg = f"Opened project: {path}{parser_note}"
             if self._project.mappings_added:
-                msg += f" ({self._project.mappings_added} control mapping(s) added from scanner)"
+                msg += f" ({self._project.mappings_added} mapping(s) from scanner)"
             self._log_panel.append_log(msg)
         except Exception as exc:
             QMessageBox.critical(self, "Error", str(exc))
@@ -328,10 +352,7 @@ class MainWindow(QMainWindow):
             src = f" [{screen.juce_component}]" if screen.juce_component else ""
             self._screen_list.addItem(f"{screen.name}{src}{tag}")
 
-        self._asset_list.clear()
-        for asset in m.assets:
-            tag = " [sprite]" if asset.is_sprite_sheet else ""
-            self._asset_list.addItem(f"{asset.name}{tag}")
+        self._asset_list.set_assets(m.assets)
 
         idx = 0
         if m.last_opened_screen_id:
@@ -482,6 +503,7 @@ class MainWindow(QMainWindow):
         self._undo.push(CallableCommand(do, undo))
         self._layers.set_screen(screen)
         self._scene.select_control(control.id)
+        self._mark_live_dirty()
 
     def _on_canvas_selection(self) -> None:
         control = self._scene.get_selected_control()
@@ -497,6 +519,33 @@ class MainWindow(QMainWindow):
         self._scene.refresh_all()
         if cid:
             self._scene.select_control(cid)
+        self._mark_live_dirty()
+
+    def _mark_live_dirty(self) -> None:
+        self._live_preview.mark_dirty()
+
+    def _on_asset_dropped(self, asset_id: str, x: int, y: int, is_sprite: bool) -> None:
+        if not self._project or not self._current_screen_id:
+            return
+        asset = self._project.manifest.get_asset(asset_id)
+        if asset is None:
+            return
+        idx = self._palette.currentIndex()
+        ctype, label = CONTROL_PALETTE[idx]
+        use_sprite = is_sprite or asset.is_sprite_sheet
+        sprite_config = self._sprite_config_for_asset(asset) if use_sprite else None
+        if is_sprite or asset.is_sprite_sheet:
+            ctype = ControlType.KNOB if idx == 0 else ctype
+        screen = self._current_screen()
+        if not screen:
+            return
+        z = max((c.z_index for c in screen.controls), default=-1) + 1
+        w, h = (120, 24) if ctype == ControlType.LABEL else (64, 64)
+        control = create_control(ctype, asset.name or label, x, y, w, h, asset_id, sprite_config)
+        control.z_index = z
+        control.mapping.screen_name = screen.name
+        self._push_add_control(control)
+        self._mark_live_dirty()
 
     def _toggle_preview(self, checked: bool) -> None:
         self._preview_mode = checked
@@ -725,3 +774,9 @@ class MainWindow(QMainWindow):
     def _refresh_git_status(self) -> None:
         if self._project:
             self._log_panel.set_git_status(get_status(self._project.root))
+
+    def _show_theme_diff(self) -> None:
+        if not self._project:
+            QMessageBox.information(self, "No project", "Open a project first.")
+            return
+        ThemeDiffDialog(self._project.root, self).exec()

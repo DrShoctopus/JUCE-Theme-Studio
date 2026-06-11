@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "juce-theme-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "GUI editor for designing, previewing, and exporting JUCE plugin themes"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,22 @@ dev = [
     "pytest>=7.4",
     "ruff>=0.4",
     "mypy>=1.8",
+]
+parsing = [
+    "tree-sitter>=0.22",
+    "tree-sitter-cpp>=0.23",
+]
+vision = [
+    "opencv-python-headless>=4.8",
+]
+clang = [
+    "libclang>=16",
+]
+full = [
+    "tree-sitter>=0.22",
+    "tree-sitter-cpp>=0.23",
+    "opencv-python-headless>=4.8",
+    "libclang>=16",
 ]
 
 [project.scripts]

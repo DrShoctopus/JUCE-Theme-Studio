@@ -155,16 +155,11 @@ def frame_position(config: SpriteConfig, frame_index: int) -> tuple[int, int]:
 
 
 def detect_sprite_grid(image_path: Path) -> tuple[int, int, int, int]:
-    """Heuristic: assume square frames tiling the image evenly."""
-    with Image.open(image_path) as img:
-        w, h = img.size
-    # Try common frame sizes
-    for frame_size in (128, 64, 48, 32, 24, 16):
-        if w % frame_size == 0 and h % frame_size == 0:
-            cols = w // frame_size
-            rows = h // frame_size
-            return frame_size, frame_size, cols * rows, cols
-    return w, h, 1, 1
+    """Detect sprite grid via OpenCV (if available) or Pillow heuristics."""
+    from juce_theme_studio.core.sprite_detect import detect_sprite_sheet
+
+    result = detect_sprite_sheet(image_path)
+    return result.frame_width, result.frame_height, result.frame_count, result.columns
 
 
 class PreviewState(str, Enum):

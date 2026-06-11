@@ -7,7 +7,17 @@ from pathlib import Path
 from PIL import Image
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QWheelEvent
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene, QGraphicsView
 
 from juce_theme_studio.core.assets import resolve_asset_path
@@ -17,6 +27,7 @@ from juce_theme_studio.core.snap import snap_position
 from juce_theme_studio.core.sprites import PreviewState
 from juce_theme_studio.gui.canvas_items import ControlGraphicsItem
 from juce_theme_studio.gui.guide_overlay import GuideOverlay
+from juce_theme_studio.gui.widgets.asset_list import MIME_ASSET_ID, MIME_ASSET_SPRITE
 
 
 class CanvasScene(QGraphicsScene):
@@ -191,12 +202,38 @@ class CanvasScene(QGraphicsScene):
 
 
 class CanvasView(QGraphicsView):
+    asset_dropped = Signal(str, int, int, bool)  # asset_id, x, y, is_sprite
+
     def __init__(self, scene: CanvasScene) -> None:
         super().__init__(scene)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setAcceptDrops(True)
         self._zoom = 1.0
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasFormat(MIME_ASSET_ID):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if event.mimeData().hasFormat(MIME_ASSET_ID):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        mime = event.mimeData()
+        if not mime.hasFormat(MIME_ASSET_ID):
+            super().dropEvent(event)
+            return
+        asset_id = bytes(mime.data(MIME_ASSET_ID)).decode("utf-8")
+        is_sprite = mime.hasFormat(MIME_ASSET_SPRITE) and mime.data(MIME_ASSET_SPRITE) == b"1"
+        pos = self.mapToScene(event.position().toPoint())
+        self.asset_dropped.emit(asset_id, int(pos.x()), int(pos.y()), is_sprite)
+        event.acceptProposedAction()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15

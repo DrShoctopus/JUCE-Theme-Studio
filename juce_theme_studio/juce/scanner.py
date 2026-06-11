@@ -145,6 +145,12 @@ def _read_source_bundle(path: Path) -> str:
 
 
 def _analyze_cpp_file(path: Path, root: Path) -> DetectedScreen | None:
+    from juce_theme_studio.juce.scanner_ast import analyze_with_ast
+
+    ast_screen = analyze_with_ast(path, root)
+    if ast_screen is not None:
+        return ast_screen
+
     text = _read_source_bundle(path)
     if not text:
         return None

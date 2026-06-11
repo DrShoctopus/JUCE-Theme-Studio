@@ -142,21 +142,41 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest
 
 Example fixture: `examples/mock_juce_project/`
 
+## Optional extras
+
+Install advanced parsing and vision backends:
+
+```bash
+pip install -e ".[full]"
+# or individually:
+pip install -e ".[parsing]"   # tree-sitter-cpp
+pip install -e ".[vision]"    # opencv-python-headless
+pip install -e ".[clang]"     # libclang
+```
+
+- **tree-sitter-cpp** / **libclang** — precise C++ component scanning (falls back to regex)
+- **OpenCV** — improved sprite sheet frame auto-detection
+
+## Drag-and-drop
+
+Drag assets from the **Asset Library** onto the canvas to place controls at the drop position.
+
+## Theme diff
+
+**Project → Theme Diff** compares manifests or your current project against the latest export backup.
+
+## Live JUCE preview
+
+1. Build the companion app: `examples/juce_live_preview/` (requires JUCE on macOS).
+2. Enable **Live JUCE Preview → Auto-export on edit** in the right panel.
+3. Point to your `JuceLivePreview` binary for runtime rendering of exported `ThemeLayout.json`.
+
 ## Limitations
 
-- Preview approximates JUCE rendering; JUCE is not embedded.
-- C++ scanning is heuristic (regex-based), not full AST analysis.
+- Native JUCE preview requires building the companion example with JUCE installed.
+- libclang needs Xcode CLT paths on macOS for best results.
 - SVG rendering depends on Qt/Pillow capabilities.
 - WEBP requires Pillow built with WEBP support.
-- OpenCV-assisted frame detection and tree-sitter-cpp integration are planned, not yet implemented.
-
-## Future Improvements
-
-- libclang / tree-sitter-cpp for precise code mapping
-- OpenCV auto-slice for sprite sheets
-- Live JUCE plugin preview bridge
-- Drag-and-drop assets onto canvas
-- Theme version diffing
 
 ## Safety
 
