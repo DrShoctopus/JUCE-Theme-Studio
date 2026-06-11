@@ -102,7 +102,11 @@ def scan_juce_project(project_root: Path) -> ScanResult:
     source_root = project_root / "Source"
     if source_root.is_dir():
         cpp_files = [p for p in source_root.rglob("*.cpp") if STUDIO_IGNORE not in p.parts]
-        cpp_files += [p for p in source_root.rglob("*.h") if STUDIO_IGNORE not in p.parts]
+        header_stems = {p.stem for p in source_root.rglob("*.cpp")}
+        cpp_files += [
+            p for p in source_root.rglob("*.h")
+            if STUDIO_IGNORE not in p.parts and p.stem not in header_stems
+        ]
     else:
         cpp_files = [
             p
@@ -110,10 +114,12 @@ def scan_juce_project(project_root: Path) -> ScanResult:
             if STUDIO_IGNORE not in p.parts and ".juce_theme_studio" not in str(p)
         ]
 
+    seen_classes: set[str] = set()
     for cpp in cpp_files:
         result.cpp_files.append(_rel(cpp, project_root))
         screen = _analyze_cpp_file(cpp, project_root)
-        if screen is not None:
+        if screen is not None and screen.class_name not in seen_classes:
+            seen_classes.add(screen.class_name)
             result.screens.append(screen)
 
     return result
@@ -122,10 +128,31 @@ def scan_juce_project(project_root: Path) -> ScanResult:
 STUDIO_IGNORE = ".juce_theme_studio"
 
 
-def _analyze_cpp_file(path: Path, root: Path) -> DetectedScreen | None:
+def _read_source_bundle(path: Path) -> str:
+    """Combine .cpp and sibling .h/.hpp for analysis."""
+    parts: list[str] = []
     try:
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        parts.append(path.read_text(encoding="utf-8", errors="ignore"))
     except OSError:
+        pass
+    for extra in (path.with_suffix(".h"), path.with_suffix(".hpp")):
+        if extra.is_file():
+            try:
+                parts.append(extra.read_text(encoding="utf-8", errors="ignore"))
+            except OSError:
+                pass
+    return "\n".join(parts)
+
+
+def _analyze_cpp_file(path: Path, root: Path) -> DetectedScreen | None:
+    from juce_theme_studio.juce.scanner_ast import analyze_with_ast
+
+    ast_screen = analyze_with_ast(path, root)
+    if ast_screen is not None:
+        return ast_screen
+
+    text = _read_source_bundle(path)
+    if not text:
         return None
 
     match = COMPONENT_BASE_PATTERN.search(text)

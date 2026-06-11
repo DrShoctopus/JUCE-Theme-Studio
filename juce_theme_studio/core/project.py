@@ -7,6 +7,7 @@ from pathlib import Path
 
 from juce_theme_studio.core.logging_config import setup_logging
 from juce_theme_studio.core.manifest import ThemeManifest
+from juce_theme_studio.core.mapping import sync_scan_mappings
 from juce_theme_studio.core.types import MANIFEST_FILENAME, STUDIO_DIR
 from juce_theme_studio.juce.scanner import ScanResult, scan_juce_project
 
@@ -19,6 +20,7 @@ class LoadedProject:
     studio_dir: Path
     manifest: ThemeManifest
     scan_result: ScanResult | None = None
+    mappings_added: int = 0
 
     @property
     def manifest_path(self) -> Path:
@@ -53,12 +55,24 @@ def load_project(project_root: Path) -> LoadedProject:
         manifest = ThemeManifest(project_root=".")
         _populate_from_scan(manifest, scan_result)
 
+    mapped = sync_scan_mappings(manifest.screens, scan_result)
+
     return LoadedProject(
         root=project_root,
         studio_dir=studio_dir,
         manifest=manifest,
         scan_result=scan_result,
+        mappings_added=mapped,
     )
+
+
+def rescan_mappings(loaded: LoadedProject) -> int:
+    """Re-apply scanner control mappings to manifest screens."""
+    if loaded.scan_result is None:
+        loaded.scan_result = scan_juce_project(loaded.root)
+    count = sync_scan_mappings(loaded.manifest.screens, loaded.scan_result)
+    loaded.mappings_added = count
+    return count
 
 
 def save_project(loaded: LoadedProject) -> None:

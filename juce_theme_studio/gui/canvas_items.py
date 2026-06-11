@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal  # QPointF used in itemChange
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem, QGraphicsTextItem
 
@@ -147,13 +147,23 @@ class ControlGraphicsItem(QGraphicsRectItem):
             painter.drawRect(h)
 
     def itemChange(self, change, value):  # noqa: ANN001
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene():
+        scene = self.scene()
+        if (
+            change == QGraphicsItem.GraphicsItemChange.ItemPositionChange
+            and scene is not None
+            and hasattr(scene, "snap_control")
+            and not self.preview_mode
+            and not self.control.locked
+        ):
             pos = value
-            # Snap handled by scene
-            return pos
+            result = scene.snap_control(self.control, pos.x(), pos.y())
+            scene.update_guides(result.guide_lines_x, result.guide_lines_y)
+            return QPointF(result.x, result.y)
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             self.control.x = int(self.pos().x())
             self.control.y = int(self.pos().y())
+            if scene is not None and hasattr(scene, "clear_guides"):
+                scene.clear_guides()
             self.geometry_changed.emit(self.control.id)
         return super().itemChange(change, value)
 

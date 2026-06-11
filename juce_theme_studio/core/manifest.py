@@ -63,9 +63,10 @@ class AssetEntry:
     asset_type: str = "image"
     is_sprite_sheet: bool = False
     original_source: str = ""
+    sprite_config: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
             "relative_path": self.relative_path,
@@ -73,6 +74,9 @@ class AssetEntry:
             "is_sprite_sheet": self.is_sprite_sheet,
             "original_source": self.original_source,
         }
+        if self.sprite_config is not None:
+            data["sprite_config"] = self.sprite_config
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AssetEntry:
@@ -83,6 +87,7 @@ class AssetEntry:
             asset_type=str(data.get("asset_type", "image")),
             is_sprite_sheet=bool(data.get("is_sprite_sheet", False)),
             original_source=str(data.get("original_source", "")),
+            sprite_config=data.get("sprite_config"),
         )
 
 

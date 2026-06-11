@@ -107,6 +107,20 @@ Integrate exported files into your JUCE project manually or via your own build s
 
 **The app never commits automatically.** Unrelated repo changes trigger a warning.
 
+## Layout Tools
+
+Use the **Layout** menu or drag controls on the canvas:
+
+- Smart snap guides appear when edges/centers align with other controls or the canvas
+- **Layout → Align** — left, center, right, top, middle, bottom
+- **Layout → Distribute** — even horizontal/vertical spacing (3+ controls)
+- **Screen Settings** panel — edit canvas width/height per screen
+- **Settings** toolbar — grid size, snap toggle, C++ export namespace
+
+## JUCE Auto-Mapping
+
+On project open, the scanner adds placeholder controls for detected C++ members (`gainSlider`, etc.) with JUCE class and variable mapping pre-filled. Use **Project → Sync JUCE Mappings** or **Rescan Project** to refresh.
+
 ## Keyboard Shortcuts
 
 | Action | Shortcut |
@@ -114,32 +128,67 @@ Integrate exported files into your JUCE project manually or via your own build s
 | Save | Ctrl/Cmd+S |
 | Undo | Ctrl/Cmd+Z |
 | Redo | Ctrl/Cmd+Shift+Z |
+| Copy / Paste / Cut | Ctrl/Cmd+C/V/X |
+| Select all | Ctrl/Cmd+A |
 | Duplicate | Ctrl/Cmd+D |
 | Delete | Delete |
+| Nudge | Arrow keys (Shift = 8px) |
 
 ## Tests
 
 ```bash
-pytest
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest
 ```
 
 Example fixture: `examples/mock_juce_project/`
 
+## Optional extras
+
+Install advanced parsing and vision backends:
+
+```bash
+pip install -e ".[full]"
+# or individually:
+pip install -e ".[parsing]"   # tree-sitter-cpp
+pip install -e ".[vision]"    # opencv-python-headless
+pip install -e ".[clang]"     # libclang
+```
+
+- **tree-sitter-cpp** / **libclang** — precise C++ component scanning (falls back to regex)
+- **OpenCV** — improved sprite sheet frame auto-detection
+
+## Drag-and-drop
+
+Drag assets from the **Asset Library** onto the canvas:
+
+- **Empty area** — creates a new control (type from Control Palette) at the drop position.
+- **Existing placeholder** — a **Link Asset to Control** dialog appears showing the C++ variable, JUCE class, and asset name. Choose **Link** or **Cancel**.
+
+## Sprite sheet → multiple library assets
+
+When importing a sprite sheet, the configuration dialog offers:
+
+- **Slice all frames into asset library** — each frame saved as its own PNG (`name_frame_00`, `name_frame_01`, …).
+- **Also keep full sprite sheet in library** — retains the master strip for strip-based controls.
+
+Use sliced frames for single-state images (LEDs, decals); keep the full sheet for knobs and meters.
+
+## Theme diff
+
+**Project → Theme Diff** compares manifests or your current project against the latest export backup.
+
+## Live JUCE preview
+
+1. Build the companion app: `examples/juce_live_preview/` (requires JUCE on macOS).
+2. Enable **Live JUCE Preview → Auto-export on edit** in the right panel.
+3. Point to your `JuceLivePreview` binary for runtime rendering of exported `ThemeLayout.json`.
+
 ## Limitations
 
-- Preview approximates JUCE rendering; JUCE is not embedded.
-- C++ scanning is heuristic (regex-based), not full AST analysis.
+- Native JUCE preview requires building the companion example with JUCE installed.
+- libclang needs Xcode CLT paths on macOS for best results.
 - SVG rendering depends on Qt/Pillow capabilities.
 - WEBP requires Pillow built with WEBP support.
-- OpenCV-assisted frame detection and tree-sitter-cpp integration are planned, not yet implemented.
-
-## Future Improvements
-
-- libclang / tree-sitter-cpp for precise code mapping
-- OpenCV auto-slice for sprite sheets
-- Live JUCE plugin preview bridge
-- Alignment guides and distribute-spacing tools
-- Theme version diffing
 
 ## Safety
 
