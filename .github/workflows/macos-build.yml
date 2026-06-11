@@ -21,7 +21,7 @@ on:
       juce_ref:
         description: JUCE git ref (branch or tag)
         required: false
-        default: master
+        default: 8.0.6
         type: string
 
 jobs:
@@ -69,6 +69,7 @@ jobs:
         if: inputs.build_juce_preview
         working-directory: juce_theme_studio/examples/juce_live_preview
         run: |
+          rm -rf build
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DJUCE_DIR="${{ runner.temp }}/JUCE"
