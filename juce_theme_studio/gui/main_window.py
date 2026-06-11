@@ -33,7 +33,7 @@ from juce_theme_studio.core.alignment import (
     distribute_horizontally,
     distribute_vertically,
 )
-from juce_theme_studio.core.assets import import_asset, resolve_asset_path
+from juce_theme_studio.core.assets import import_asset, import_project_assets, resolve_asset_path
 from juce_theme_studio.core.controls import Control, create_control
 from juce_theme_studio.core.manifest import ThemeManifest
 from juce_theme_studio.core.mapping import sync_scan_mappings
@@ -209,7 +209,10 @@ class MainWindow(QMainWindow):
         al.addWidget(QLabel("Asset Library"))
         self._asset_list = AssetListWidget()
         al.addWidget(self._asset_list)
-        al.addWidget(self._btn("Import Asset", self._import_asset))
+        row_assets = QHBoxLayout()
+        row_assets.addWidget(self._btn("Import Asset", self._import_asset))
+        row_assets.addWidget(self._btn("From Project", lambda: self._import_from_project()))
+        al.addLayout(row_assets)
         al.addWidget(self._btn("Import Sprite Sheet", self._import_sprite_sheet))
         al.addWidget(self._btn("Set Background", self._set_background))
         left.addWidget(assets_box)
@@ -328,6 +331,7 @@ class MainWindow(QMainWindow):
             if self._project.mappings_added:
                 msg += f" ({self._project.mappings_added} mapping(s) from scanner)"
             self._log_panel.append_log(msg)
+            self._offer_import_project_assets()
         except Exception as exc:
             QMessageBox.critical(self, "Error", str(exc))
             logger.exception("Failed to open project")
@@ -420,6 +424,61 @@ class MainWindow(QMainWindow):
             entry = import_asset(self._project.manifest, self._project.root, Path(p))
             self._log_panel.append_log(f"Imported asset: {entry.name}")
         self._refresh_ui()
+
+    def _offer_import_project_assets(self) -> None:
+        if not self._project or not self._project.scan_result:
+            return
+        if self._project.manifest.assets:
+            return
+        images = self._project.scan_result.image_assets
+        if not images:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Import project assets",
+            f"Found {len(images)} image(s) in this JUCE project.\n\n"
+            "Copy them into the asset library now? (Original files are not modified.)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._import_from_project(silent=False)
+
+    def _import_from_project(self, *, silent: bool = False) -> None:
+        if not self._project or not self._project.scan_result:
+            if not silent:
+                QMessageBox.information(self, "No project", "Open a project first.")
+            return
+        images = self._project.scan_result.image_assets
+        if not images:
+            if not silent:
+                QMessageBox.information(
+                    self,
+                    "No images",
+                    "No image files were found under this project.",
+                )
+            return
+        imported = import_project_assets(
+            self._project.manifest,
+            self._project.root,
+            images,
+        )
+        if imported:
+            for entry in imported:
+                self._log_panel.append_log(f"Imported from project: {entry.name}")
+            self._refresh_ui()
+            if not silent:
+                QMessageBox.information(
+                    self,
+                    "Import complete",
+                    f"Copied {len(imported)} asset(s) into the library.",
+                )
+        elif not silent:
+            QMessageBox.information(
+                self,
+                "Already imported",
+                "All project images are already in the asset library.",
+            )
 
     def _import_sprite_sheet(self) -> None:
         if not self._project:

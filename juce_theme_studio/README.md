@@ -44,6 +44,16 @@ python -m juce_theme_studio.app.main
 
 Your original source and assets are never modified.
 
+When you reopen a project, saved control positions and sizes are restored from `theme_project.json`. You can drag controls to move them and use the resize handle unless they are **locked** (Layers panel) or **Preview Mode** is enabled.
+
+## Asset Library
+
+Images under your JUCE project (`Resources/`, `BinaryData/`, etc.) are detected on open but are **not** copied automatically unless you confirm the prompt (when the library is empty) or click **From Project** in the Asset Library section.
+
+- **Import Asset** — pick any file from disk.
+- **From Project** — copy all detected project images into `.juce_theme_studio/assets/` (skips files already imported).
+- **Import Sprite Sheet** — import a strip/grid with optional per-frame slicing.
+
 ## Import Sprite Sheets
 
 1. Click **Import Sprite Sheet** in the Asset Library.
