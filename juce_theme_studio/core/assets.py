@@ -75,3 +75,53 @@ def resolve_asset_path(project_root: Path, entry: AssetEntry) -> Path:
 
 def asset_exists(project_root: Path, entry: AssetEntry) -> bool:
     return resolve_asset_path(project_root, entry).is_file()
+
+
+def _normalize_source_path(project_root: Path, source: str | Path) -> str:
+    """Canonical project-relative path for duplicate detection."""
+    path = Path(source)
+    if path.is_absolute():
+        try:
+            path = path.resolve().relative_to(project_root.resolve())
+        except ValueError:
+            return str(path)
+    return str(path).replace("\\", "/")
+
+
+def is_asset_imported(manifest: ThemeManifest, project_root: Path, source: str | Path) -> bool:
+    """Return True if this project file was already copied into the asset library."""
+    rel = _normalize_source_path(project_root, source)
+    for entry in manifest.assets:
+        if not entry.original_source:
+            continue
+        if _normalize_source_path(project_root, entry.original_source) == rel:
+            return True
+    return False
+
+
+def import_project_assets(
+    manifest: ThemeManifest,
+    project_root: Path,
+    image_paths: list[str],
+    *,
+    skip_existing: bool = True,
+) -> list[AssetEntry]:
+    """Copy project image files into the asset library without modifying sources."""
+    project_root = project_root.resolve()
+    imported: list[AssetEntry] = []
+
+    for rel_path in image_paths:
+        if skip_existing and is_asset_imported(manifest, project_root, rel_path):
+            continue
+        source = project_root / rel_path
+        if not source.is_file():
+            continue
+        entry = import_asset(
+            manifest,
+            project_root,
+            source,
+            name=source.stem,
+        )
+        imported.append(entry)
+
+    return imported
