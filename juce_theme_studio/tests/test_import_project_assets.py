@@ -35,3 +35,14 @@ def test_import_project_assets_skips_duplicates(fixture_project: Path) -> None:
     assert len(first) == len(scan.image_assets)
     assert second == []
     assert len(manifest.assets) == len(scan.image_assets)
+
+
+def test_import_project_assets_detects_sprite_strips(fixture_project: Path) -> None:
+    ensure_studio_dirs(fixture_project)
+    manifest = ThemeManifest()
+    scan = scan_juce_project(fixture_project)
+
+    imported = import_project_assets(manifest, fixture_project, scan.image_assets)
+    sprite_entries = [e for e in imported if e.is_sprite_sheet]
+
+    assert sprite_entries, "Expected wide strip images to be flagged as sprite sheets"

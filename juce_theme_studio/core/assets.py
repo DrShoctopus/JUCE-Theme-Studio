@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
+
+from PIL import Image
 
 from juce_theme_studio.core.manifest import AssetEntry, ThemeManifest
 from juce_theme_studio.core.types import STUDIO_DIR
@@ -88,6 +91,76 @@ def _normalize_source_path(project_root: Path, source: str | Path) -> str:
     return str(path).replace("\\", "/")
 
 
+@dataclass(frozen=True)
+class AssetUsage:
+    screen_name: str
+    description: str
+
+
+def get_asset_usages(manifest: ThemeManifest, asset_id: str) -> list[AssetUsage]:
+    """Return where an asset is referenced in screens and controls."""
+    usages: list[AssetUsage] = []
+    for screen in manifest.screens:
+        if screen.background_asset_id == asset_id:
+            usages.append(AssetUsage(screen.name, "background"))
+        for control in screen.controls:
+            if control.asset_id == asset_id:
+                label = control.mapping.cpp_variable or control.name or control.id
+                usages.append(AssetUsage(screen.name, label))
+    return usages
+
+
+def delete_asset(
+    manifest: ThemeManifest,
+    project_root: Path,
+    asset_id: str,
+    *,
+    clear_references: bool = False,
+) -> AssetEntry | None:
+    """Remove an asset from the library and delete its file on disk."""
+    entry = manifest.get_asset(asset_id)
+    if entry is None:
+        return None
+
+    path = resolve_asset_path(project_root, entry)
+    manifest.assets = [a for a in manifest.assets if a.id != asset_id]
+    if path.is_file():
+        path.unlink()
+
+    if clear_references:
+        for screen in manifest.screens:
+            if screen.background_asset_id == asset_id:
+                screen.background_asset_id = None
+            for control in screen.controls:
+                if control.asset_id == asset_id:
+                    control.asset_id = None
+
+    return entry
+
+
+def unimported_project_images(
+    manifest: ThemeManifest,
+    project_root: Path,
+    image_paths: list[str],
+) -> list[str]:
+    """Return project image paths not yet copied into the asset library."""
+    return [
+        rel_path
+        for rel_path in image_paths
+        if not is_asset_imported(manifest, project_root, rel_path)
+    ]
+
+
+def _looks_like_sprite_sheet(source: Path) -> bool:
+    """Heuristic: very wide or tall images are likely sprite strips."""
+    try:
+        with Image.open(source) as img:
+            w, h = img.size
+            return w > h * 3 or h > w * 3
+    except Exception:
+        return False
+
+
 def is_asset_imported(manifest: ThemeManifest, project_root: Path, source: str | Path) -> bool:
     """Return True if this project file was already copied into the asset library."""
     rel = _normalize_source_path(project_root, source)
@@ -121,6 +194,7 @@ def import_project_assets(
             project_root,
             source,
             name=source.stem,
+            is_sprite_sheet=_looks_like_sprite_sheet(source),
         )
         imported.append(entry)
 
