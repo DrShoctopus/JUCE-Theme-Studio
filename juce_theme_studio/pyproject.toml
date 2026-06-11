@@ -41,6 +41,7 @@ full = [
 
 [project.scripts]
 juce-theme-studio = "juce_theme_studio.app.main:main"
+juce-theme-studio-diagnose = "juce_theme_studio.app.diagnose_project:main"
 
 [tool.setuptools]
 package-dir = { "juce_theme_studio" = "." }
