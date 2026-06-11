@@ -8,16 +8,19 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QMessageBox,
     QPlainTextEdit,
+    QPushButton,
     QVBoxLayout,
 )
 
 from juce_theme_studio.git_tools.git import (
     commit,
+    create_backup_branch,
     get_diff,
     get_status,
 )
@@ -32,7 +35,12 @@ class GitCommitDialog(QDialog):
 
         layout = QVBoxLayout(self)
         self._status = get_status(project_root)
-        layout.addWidget(QLabel(f"Branch: {self._status.branch or 'unknown'}"))
+        branch_row = QHBoxLayout()
+        branch_row.addWidget(QLabel(f"Branch: {self._status.branch or 'unknown'}"))
+        backup_btn = QPushButton("Create backup branch")
+        backup_btn.clicked.connect(self._create_backup_branch)
+        branch_row.addWidget(backup_btn)
+        layout.addLayout(branch_row)
 
         if self._status.has_unrelated_changes:
             warn = QLabel(
@@ -76,6 +84,19 @@ class GitCommitDialog(QDialog):
 
         if theme_files:
             self._file_list.setCurrentRow(0)
+
+    def _create_backup_branch(self) -> None:
+        try:
+            name = create_backup_branch(self.project_root)
+            QMessageBox.information(
+                self,
+                "Backup branch",
+                f"Created and checked out branch: {name}\n"
+                "You can commit theme changes here safely.",
+            )
+            self._status = get_status(self.project_root)
+        except Exception as exc:
+            QMessageBox.critical(self, "Branch failed", str(exc))
 
     def _show_diff(self, path: str) -> None:
         if path:

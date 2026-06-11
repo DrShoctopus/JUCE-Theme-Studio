@@ -25,6 +25,36 @@ class ExportResult:
     backup_dir: Path | None = None
 
 
+def preview_export_files(manifest: ThemeManifest, project_root: Path) -> list[str]:
+    """List relative paths that export would write (for preview dialog)."""
+    project_root = project_root.resolve()
+    studio = project_root / STUDIO_DIR
+    export_dir = studio / manifest.export_settings.output_subdir
+    rel_export = str(export_dir.relative_to(project_root))
+    files: list[str] = []
+
+    if manifest.export_settings.export_json:
+        files.append(f"{rel_export}/ThemeLayout.json")
+
+    if manifest.export_settings.copy_assets:
+        for asset in manifest.assets:
+            name = Path(asset.relative_path).name
+            files.append(f"{rel_export}/assets/{name}")
+
+    if manifest.export_settings.export_cpp:
+        for name in (
+            "ThemeAssets.h",
+            "ThemeAssets.cpp",
+            "ThemeLookAndFeel.h",
+            "ThemeLookAndFeel.cpp",
+            "GeneratedThemeComponents.h",
+            "GeneratedThemeComponents.cpp",
+        ):
+            files.append(f"{rel_export}/{name}")
+
+    return files
+
+
 def export_theme(
     manifest: ThemeManifest,
     project_root: Path,

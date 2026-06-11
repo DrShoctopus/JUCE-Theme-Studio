@@ -99,7 +99,37 @@ class PropertiesPanel(QWidget):
         sprite_form.addRow("Start angle", self._start_angle)
         sprite_form.addRow("End angle", self._end_angle)
 
+        self._default_frame = QSpinBox()
+        self._default_frame.setRange(0, 255)
+        self._default_frame.valueChanged.connect(self._on_sprite_changed)
+        self._hover_frame = QSpinBox()
+        self._hover_frame.setRange(-1, 255)
+        self._hover_frame.setSpecialValueText("none")
+        self._hover_frame.valueChanged.connect(self._on_sprite_changed)
+        self._active_frame = QSpinBox()
+        self._active_frame.setRange(-1, 255)
+        self._active_frame.setSpecialValueText("none")
+        self._active_frame.valueChanged.connect(self._on_sprite_changed)
+        self._disabled_frame = QSpinBox()
+        self._disabled_frame.setRange(-1, 255)
+        self._disabled_frame.setSpecialValueText("none")
+        self._disabled_frame.valueChanged.connect(self._on_sprite_changed)
+        sprite_form.addRow("Default frame", self._default_frame)
+        sprite_form.addRow("Hover frame", self._hover_frame)
+        sprite_form.addRow("Active frame", self._active_frame)
+        sprite_form.addRow("Disabled frame", self._disabled_frame)
+
         self._form.addRow(sprite_box)
+
+        layer_box = QGroupBox("Layer")
+        layer_form = QFormLayout(layer_box)
+        self._visible = QCheckBox("Visible")
+        self._visible.toggled.connect(self._emit_change)
+        self._locked = QCheckBox("Locked")
+        self._locked.toggled.connect(self._emit_change)
+        layer_form.addRow(self._visible)
+        layer_form.addRow(self._locked)
+        self._form.addRow(layer_box)
 
         # Mapping
         map_box = QGroupBox("JUCE Mapping")
@@ -156,6 +186,9 @@ class PropertiesPanel(QWidget):
         self._preview_value.setValue(control.preview_value)
         self._preview_on.setChecked(control.preview_on)
 
+        self._visible.setChecked(control.visible)
+        self._locked.setChecked(control.locked)
+
         sc = control.sprite_config
         if sc:
             idx = self._sprite_layout.findData(sc.layout.value)
@@ -165,6 +198,11 @@ class PropertiesPanel(QWidget):
             self._frame_h.setValue(sc.frame_height)
             self._start_angle.setValue(sc.start_angle_deg)
             self._end_angle.setValue(sc.end_angle_deg)
+            self._default_frame.setValue(sc.default_frame)
+            self._hover_frame.setValue(sc.hover_frame if sc.hover_frame is not None else -1)
+            self._active_frame.setValue(sc.active_frame if sc.active_frame is not None else -1)
+            dis = sc.disabled_frame if sc.disabled_frame is not None else -1
+            self._disabled_frame.setValue(dis)
         self._block = False
 
     def _on_bounds_changed(self) -> None:
@@ -188,6 +226,11 @@ class PropertiesPanel(QWidget):
         sc.frame_height = self._frame_h.value()
         sc.start_angle_deg = self._start_angle.value()
         sc.end_angle_deg = self._end_angle.value()
+        sc.default_frame = self._default_frame.value()
+        sc.hover_frame = self._hover_frame.value() if self._hover_frame.value() >= 0 else None
+        sc.active_frame = self._active_frame.value() if self._active_frame.value() >= 0 else None
+        dis = self._disabled_frame.value()
+        sc.disabled_frame = dis if dis >= 0 else None
         self._emit_change()
 
     def _on_preview_changed(self) -> None:
@@ -206,4 +249,6 @@ class PropertiesPanel(QWidget):
         self._control.mapping.juce_class = self._juce_class.text()
         self._control.mapping.cpp_variable = self._cpp_var.text()
         self._control.mapping.parameter_id = self._param_id.text()
+        self._control.visible = self._visible.isChecked()
+        self._control.locked = self._locked.isChecked()
         self.properties_changed.emit()

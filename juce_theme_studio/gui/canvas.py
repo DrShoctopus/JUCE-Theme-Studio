@@ -13,8 +13,10 @@ from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsS
 from juce_theme_studio.core.assets import resolve_asset_path
 from juce_theme_studio.core.controls import Control
 from juce_theme_studio.core.manifest import Screen, ThemeManifest
+from juce_theme_studio.core.snap import snap_position
 from juce_theme_studio.core.sprites import PreviewState
 from juce_theme_studio.gui.canvas_items import ControlGraphicsItem
+from juce_theme_studio.gui.guide_overlay import GuideOverlay
 
 
 class CanvasScene(QGraphicsScene):
@@ -33,6 +35,8 @@ class CanvasScene(QGraphicsScene):
         self._items: dict[str, ControlGraphicsItem] = {}
         self._bg_item: QGraphicsPixmapItem | None = None
         self._border: QGraphicsRectItem | None = None
+        self._guides = GuideOverlay()
+        self.show_guides = True
 
     def load_screen(self, screen: Screen) -> None:
         self.screen = screen
@@ -97,11 +101,47 @@ class CanvasScene(QGraphicsScene):
         if self.screen:
             self.screen.controls = [c for c in self.screen.controls if c.id != control_id]
 
+    def get_selected_controls(self) -> list[Control]:
+        return [
+            item.control
+            for item in self.selectedItems()
+            if isinstance(item, ControlGraphicsItem)
+        ]
+
     def get_selected_control(self) -> Control | None:
-        for item in self.selectedItems():
-            if isinstance(item, ControlGraphicsItem):
-                return item.control
-        return None
+        selected = self.get_selected_controls()
+        return selected[0] if selected else None
+
+    def snap_control(self, control: Control, x: float, y: float):
+        if self.screen is None:
+            from juce_theme_studio.core.snap import SnapResult
+            return SnapResult(int(x), int(y), [], [])
+        others = self.screen.controls
+        return snap_position(
+            control,
+            x,
+            y,
+            others,
+            canvas_width=self.screen.canvas_width,
+            canvas_height=self.screen.canvas_height,
+            grid_size=self.grid_size,
+            snap_to_grid=self.snap_to_grid,
+        )
+
+    def update_guides(self, x_lines: list[int], y_lines: list[int]) -> None:
+        if not self.show_guides or self.screen is None:
+            self._guides.clear(self)
+            return
+        self._guides.show(
+            self,
+            x_lines,
+            y_lines,
+            self.screen.canvas_width,
+            self.screen.canvas_height,
+        )
+
+    def clear_guides(self) -> None:
+        self._guides.clear(self)
 
     def select_control(self, control_id: str | None) -> None:
         self.clearSelection()

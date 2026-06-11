@@ -107,6 +107,20 @@ Integrate exported files into your JUCE project manually or via your own build s
 
 **The app never commits automatically.** Unrelated repo changes trigger a warning.
 
+## Layout Tools
+
+Use the **Layout** menu or drag controls on the canvas:
+
+- Smart snap guides appear when edges/centers align with other controls or the canvas
+- **Layout → Align** — left, center, right, top, middle, bottom
+- **Layout → Distribute** — even horizontal/vertical spacing (3+ controls)
+- **Screen Settings** panel — edit canvas width/height per screen
+- **Settings** toolbar — grid size, snap toggle, C++ export namespace
+
+## JUCE Auto-Mapping
+
+On project open, the scanner adds placeholder controls for detected C++ members (`gainSlider`, etc.) with JUCE class and variable mapping pre-filled. Use **Project → Sync JUCE Mappings** or **Rescan Project** to refresh.
+
 ## Keyboard Shortcuts
 
 | Action | Shortcut |
@@ -114,13 +128,16 @@ Integrate exported files into your JUCE project manually or via your own build s
 | Save | Ctrl/Cmd+S |
 | Undo | Ctrl/Cmd+Z |
 | Redo | Ctrl/Cmd+Shift+Z |
+| Copy / Paste / Cut | Ctrl/Cmd+C/V/X |
+| Select all | Ctrl/Cmd+A |
 | Duplicate | Ctrl/Cmd+D |
 | Delete | Delete |
+| Nudge | Arrow keys (Shift = 8px) |
 
 ## Tests
 
 ```bash
-pytest
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest
 ```
 
 Example fixture: `examples/mock_juce_project/`
@@ -138,7 +155,7 @@ Example fixture: `examples/mock_juce_project/`
 - libclang / tree-sitter-cpp for precise code mapping
 - OpenCV auto-slice for sprite sheets
 - Live JUCE plugin preview bridge
-- Alignment guides and distribute-spacing tools
+- Drag-and-drop assets onto canvas
 - Theme version diffing
 
 ## Safety
