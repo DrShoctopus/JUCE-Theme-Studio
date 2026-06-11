@@ -8,7 +8,7 @@ from PIL import Image
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal  # QPointF used in itemChange
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem, QGraphicsTextItem
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject, QGraphicsTextItem
 
 from juce_theme_studio.core.assets import resolve_asset_path
 from juce_theme_studio.core.controls import Control
@@ -22,7 +22,7 @@ from juce_theme_studio.core.sprites import (
 from juce_theme_studio.core.types import ControlType
 
 
-class ControlGraphicsItem(QGraphicsRectItem):
+class ControlGraphicsItem(QGraphicsObject):
     """Draggable, resizable control on the canvas."""
 
     geometry_changed = Signal(str)
@@ -37,7 +37,8 @@ class ControlGraphicsItem(QGraphicsRectItem):
         preview_mode: bool = False,
         button_preview_state: PreviewState = PreviewState.NORMAL,
     ) -> None:
-        super().__init__(0, 0, control.width, control.height)
+        super().__init__()
+        self._rect = QRectF(0, 0, control.width, control.height)
         self.control = control
         self.manifest = manifest
         self.project_root = project_root
@@ -64,6 +65,19 @@ class ControlGraphicsItem(QGraphicsRectItem):
         self._label.setPos(2, 2)
 
         self._refresh_pixmap()
+
+    def boundingRect(self) -> QRectF:
+        return self._rect
+
+    def rect(self) -> QRectF:
+        return QRectF(self._rect)
+
+    def setRect(self, x: float, y: float, width: float, height: float) -> None:
+        new_rect = QRectF(x, y, width, height)
+        if new_rect == self._rect:
+            return
+        self.prepareGeometryChange()
+        self._rect = new_rect
 
     def _refresh_pixmap(self) -> None:
         self._pixmap = None
@@ -101,13 +115,21 @@ class ControlGraphicsItem(QGraphicsRectItem):
             if self.preview_mode:
                 if self.button_preview_state != PreviewState.NORMAL:
                     return frame_for_button_state(sc, self.button_preview_state)
-                return sc.active_frame if self.control.preview_on else sc.default_frame
+                return (
+                    sc.active_frame
+                    if self.control.preview_on and sc.active_frame is not None
+                    else sc.default_frame
+                )
             return sc.default_frame
         if ctype in {ControlType.KNOB, ControlType.SLIDER, ControlType.METER, ControlType.VU_METER,
                      ControlType.GAIN_REDUCTION_METER}:
             return frame_index_for_value(sc, self.control.preview_value)
         if ctype == ControlType.LED:
-            return sc.active_frame if self.control.preview_on else sc.default_frame
+            return (
+                sc.active_frame
+                if self.control.preview_on and sc.active_frame is not None
+                else sc.default_frame
+            )
         return sc.default_frame
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001

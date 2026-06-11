@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -193,7 +193,7 @@ class CanvasScene(QGraphicsScene):
         g = self.grid_size
         return QPointF(round(pos.x() / g) * g, round(pos.y() / g) * g)
 
-    def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
+    def drawBackground(self, painter: QPainter, rect: QRectF | QRect) -> None:
         super().drawBackground(painter, rect)
         if not self.snap_to_grid:
             return
@@ -237,8 +237,11 @@ class CanvasView(QGraphicsView):
         if not mime.hasFormat(MIME_ASSET_ID):
             super().dropEvent(event)
             return
-        asset_id = bytes(mime.data(MIME_ASSET_ID)).decode("utf-8")
-        is_sprite = mime.hasFormat(MIME_ASSET_SPRITE) and mime.data(MIME_ASSET_SPRITE) == b"1"
+        asset_id = bytes(mime.data(MIME_ASSET_ID).data()).decode("utf-8")
+        is_sprite = (
+            mime.hasFormat(MIME_ASSET_SPRITE)
+            and bytes(mime.data(MIME_ASSET_SPRITE).data()) == b"1"
+        )
         pos = self.mapToScene(event.position().toPoint())
         target_id = ""
         scene = self.scene()

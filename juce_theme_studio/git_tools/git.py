@@ -5,11 +5,15 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
+git: Any = None
 try:
-    import git
+    import git as git_module
 except ImportError:
-    git = None  # type: ignore[assignment]
+    pass
+else:
+    git = git_module
 
 
 @dataclass
@@ -32,7 +36,7 @@ def detect_git_repo(project_root: Path) -> bool:
         try:
             _ = git.Repo(project_root, search_parent_directories=True)
             return True
-        except git.InvalidGitError:
+        except Exception:
             return False
     return (project_root / ".git").exists()
 
@@ -49,9 +53,10 @@ def get_status(project_root: Path, studio_relative: str = ".juce_theme_studio") 
             repo = git.Repo(project_root, search_parent_directories=True)
             status.branch = repo.active_branch.name if not repo.head.is_detached else "DETACHED"
             for item in repo.index.diff(None):
-                status.changed_files.append(item.a_path)
+                if item.a_path is not None:
+                    status.changed_files.append(item.a_path)
             for item in repo.index.diff("HEAD"):
-                if item.a_path not in status.changed_files:
+                if item.a_path is not None and item.a_path not in status.changed_files:
                     status.changed_files.append(item.a_path)
             status.untracked_files = list(repo.untracked_files)
         except Exception:
@@ -116,7 +121,7 @@ def commit(project_root: Path, message: str, files: list[str] | None = None) -> 
     if git is not None:
         repo = git.Repo(project_root, search_parent_directories=True)
         commit_obj = repo.index.commit(message)
-        return commit_obj.hexsha[:8]
+        return str(commit_obj.hexsha[:8])
     _git_cmd(project_root, "commit", "-m", message)
     return _git_cmd(project_root, "rev-parse", "--short", "HEAD") or ""
 
