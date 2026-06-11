@@ -12,6 +12,7 @@ MIME_ASSET_SPRITE = "application/x-juce-asset-sprite"
 
 class AssetListWidget(QListWidget):
     delete_requested = Signal()
+    asset_clicked = Signal(str, bool)  # asset_id, is_sprite
 
     def __init__(self) -> None:
         super().__init__()
@@ -19,6 +20,14 @@ class AssetListWidget(QListWidget):
         self.setDefaultDropAction(Qt.DropAction.CopyAction)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+        self.itemClicked.connect(self._on_item_clicked)
+
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        asset_id = item.data(Qt.ItemDataRole.UserRole)
+        if not asset_id:
+            return
+        is_sprite = bool(item.data(Qt.ItemDataRole.UserRole + 1))
+        self.asset_clicked.emit(str(asset_id), is_sprite)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):

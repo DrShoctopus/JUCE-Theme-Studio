@@ -63,6 +63,7 @@ from juce_theme_studio.gui.dialogs.export_preview_dialog import ExportPreviewDia
 from juce_theme_studio.gui.dialogs.link_asset_dialog import LinkAssetDialog
 from juce_theme_studio.gui.dialogs.settings_dialog import SettingsDialog
 from juce_theme_studio.gui.dialogs.sprite_import_dialog import SpriteImportDialog
+from juce_theme_studio.gui.dialogs.theme_colors_dialog import ThemeColorsDialog
 from juce_theme_studio.gui.dialogs.theme_diff_dialog import ThemeDiffDialog
 from juce_theme_studio.gui.panels.export_panel import ExportPanel
 from juce_theme_studio.gui.panels.git_panel import GitCommitDialog
@@ -111,6 +112,13 @@ class MainWindow(QMainWindow):
         self._live_preview = LivePreviewBridge(self)
         self._assign_asset_id: str | None = None
         self._assign_asset_is_sprite = False
+        self._dirty = False
+        # Snapshot of the currently selected control, used to build undo entries
+        # from Properties-panel edits (which mutate the control in place).
+        self._props_baseline: Control | None = None
+        # True while we programmatically re-select a control during a refresh, so
+        # the selection handler does not overwrite the undo baseline mid-edit.
+        self._restoring_selection = False
 
         self._build_toolbar()
         self._build_menus()
@@ -194,6 +202,8 @@ class MainWindow(QMainWindow):
         project_menu = self.menuBar().addMenu("Project")
         project_menu.addAction("Sync JUCE Mappings", self._sync_mappings)
         project_menu.addAction("Rescan Project", self._rescan_project)
+        project_menu.addSeparator()
+        project_menu.addAction("Theme Colors…", self._show_theme_colors)
         project_menu.addAction("Theme Diff…", self._show_theme_diff)
 
     def _build_ui(self) -> None:
@@ -253,6 +263,7 @@ class MainWindow(QMainWindow):
         self._canvas = CanvasView(self._scene)
         self._scene.selectionChanged.connect(self._on_canvas_selection)
         self._scene.control_moved.connect(lambda _cid: self._mark_live_dirty())
+        self._scene.geometry_committed.connect(self._on_geometry_committed)
         self._scene.control_clicked.connect(self._on_control_clicked)
         self._canvas.asset_dropped.connect(self._on_asset_dropped)
 
@@ -263,6 +274,7 @@ class MainWindow(QMainWindow):
 
         self._properties = PropertiesPanel()
         self._properties.properties_changed.connect(self._on_properties_changed)
+        self._properties.edit_committed.connect(self._on_property_commit)
         right.addWidget(self._properties)
 
         self._layers = LayersPanel()
@@ -337,12 +349,15 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def _open_project(self) -> None:
+        if not self._maybe_save_changes():
+            return
         path = QFileDialog.getExistingDirectory(self, "Open JUCE Project")
         if not path:
             return
         try:
             self._project = load_project(Path(path))
             self._undo.clear()
+            self._props_baseline = None
             self._scene.manifest = self._project.manifest
             self._scene.project_root = self._project.root
             self._export_panel.set_manifest(self._project.manifest)
@@ -350,6 +365,8 @@ class MainWindow(QMainWindow):
             binary = LivePreviewBridge.find_bundled_preview(self._project.root)
             self._live_panel.set_suggested_binary(binary)
             self._refresh_ui()
+            self._set_dirty(False)
+            self._refresh_parameter_suggestions()
             parsers = []
             if treesitter_available():
                 parsers.append("tree-sitter-cpp")
@@ -371,8 +388,46 @@ class MainWindow(QMainWindow):
         if self._current_screen_id:
             self._project.manifest.last_opened_screen_id = self._current_screen_id
         save_project(self._project)
+        self._set_dirty(False)
         self._log_panel.append_log("Project saved.")
         self._refresh_git_status()
+
+    def _set_dirty(self, dirty: bool) -> None:
+        self._dirty = dirty
+        self._update_title()
+
+    def _update_title(self) -> None:
+        title = "JUCE Theme Studio"
+        if self._project:
+            title += f" — {self._project.root.name}"
+        if self._dirty:
+            title += " *"
+        self.setWindowTitle(title)
+
+    def _maybe_save_changes(self) -> bool:
+        """Prompt to save unsaved edits. Return False only if the user cancels."""
+        if not self._dirty or not self._project:
+            return True
+        reply = QMessageBox.question(
+            self,
+            "Unsaved changes",
+            "Save changes to the theme project before continuing?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return False
+        if reply == QMessageBox.StandardButton.Save:
+            self._save_project()
+        return True
+
+    def closeEvent(self, event) -> None:  # noqa: ANN001
+        if self._maybe_save_changes():
+            event.accept()
+        else:
+            event.ignore()
 
     def _refresh_ui(self) -> None:
         if not self._project:
@@ -458,6 +513,7 @@ class MainWindow(QMainWindow):
             new_idx = len(self._project.manifest.screens) - 1
             self._screen_list.setCurrentRow(new_idx)
             self._load_screen_at_row(new_idx)
+            self._set_dirty(True)
 
     def _import_asset(self) -> None:
         if not self._project:
@@ -468,10 +524,14 @@ class MainWindow(QMainWindow):
             "",
             "Images (*.png *.jpg *.jpeg *.webp);;Fonts (*.ttf *.otf);;All (*)",
         )
+        imported_any = False
         for p in paths:
             entry = import_asset(self._project.manifest, self._project.root, Path(p))
             self._log_panel.append_log(f"Imported asset: {entry.name}")
+            imported_any = True
         self._refresh_ui()
+        if imported_any:
+            self._set_dirty(True)
 
     def _offer_import_project_assets(self) -> None:
         if not self._project or not self._project.scan_result:
@@ -523,6 +583,7 @@ class MainWindow(QMainWindow):
             for entry in imported:
                 self._log_panel.append_log(f"Imported from project: {entry.name}")
             save_project(self._project)
+            self._set_dirty(False)
             self._refresh_ui()
             if not silent:
                 QMessageBox.information(
@@ -582,6 +643,7 @@ class MainWindow(QMainWindow):
         if deleted is None:
             return
         save_project(self._project)
+        self._set_dirty(False)
         self._refresh_ui()
         if self._current_screen_id:
             self._scene.load_screen(self._current_screen())
@@ -630,6 +692,7 @@ class MainWindow(QMainWindow):
             self._log_panel.append_log(f"Imported sprite sheet: {entry.name}")
 
         self._refresh_ui()
+        self._set_dirty(True)
 
     def _set_background(self) -> None:
         if not self._project or not self._current_screen_id:
@@ -705,6 +768,8 @@ class MainWindow(QMainWindow):
     def _on_canvas_selection(self) -> None:
         control = self._scene.get_selected_control()
         self._properties.set_control(control)
+        if not self._restoring_selection:
+            self._props_baseline = copy.deepcopy(control) if control else None
         if control:
             self._layers.select_control(control.id)
 
@@ -713,13 +778,87 @@ class MainWindow(QMainWindow):
         sel = self._scene.get_selected_control()
         if sel:
             cid = sel.id
-        self._scene.refresh_all()
-        if cid:
-            self._scene.select_control(cid)
+        self._restoring_selection = True
+        try:
+            self._scene.refresh_all()
+            if cid:
+                self._scene.select_control(cid)
+        finally:
+            self._restoring_selection = False
         self._mark_live_dirty()
+
+    def _on_property_commit(self) -> None:
+        """Turn a finished Properties-panel edit into an undoable command."""
+        control = self._scene.get_selected_control()
+        if control is None:
+            return
+        baseline = self._props_baseline
+        if baseline is None or baseline.id != control.id:
+            self._props_baseline = copy.deepcopy(control)
+            return
+        before = baseline
+        after = copy.deepcopy(control)
+        if before.to_dict() == after.to_dict():
+            return  # nothing actually changed (e.g. spurious editingFinished)
+
+        def do():
+            control.assign_from(after)
+            self._refresh_after_control_edit(control.id)
+
+        def undo():
+            control.assign_from(before)
+            self._refresh_after_control_edit(control.id)
+
+        # The control already holds the "after" state from live editing, so register
+        # the command without re-applying it.
+        self._undo.push_applied(CallableCommand(do, undo))
+        self._props_baseline = copy.deepcopy(control)
+        self._set_dirty(True)
+
+    def _on_geometry_committed(self, before: dict) -> None:
+        """Make a drag/resize undoable. ``before`` maps control id -> (x, y, w, h)."""
+        screen = self._current_screen()
+        if not screen:
+            return
+        by_id = {c.id: c for c in screen.controls}
+        after = {
+            cid: (by_id[cid].x, by_id[cid].y, by_id[cid].width, by_id[cid].height)
+            for cid in before
+            if cid in by_id
+        }
+
+        def apply(state: dict) -> None:
+            for cid, (x, y, w, h) in state.items():
+                c = by_id.get(cid)
+                if c is not None:
+                    c.x, c.y, c.width, c.height = x, y, w, h
+            self._refresh_canvas()
+
+        self._undo.push_applied(CallableCommand(lambda: apply(after), lambda: apply(before)))
+        self._set_dirty(True)
+
+    def _refresh_after_control_edit(self, control_id: str) -> None:
+        self._scene.refresh_all()
+        self._scene.select_control(control_id)
+        control = next(
+            (c for c in (self._current_screen().controls if self._current_screen() else [])
+             if c.id == control_id),
+            None,
+        )
+        self._properties.set_control(control)
+        self._props_baseline = copy.deepcopy(control) if control else None
+        self._layers.set_screen(self._current_screen())
+        self._mark_live_dirty()
+
+    def _refresh_parameter_suggestions(self) -> None:
+        if self._project and self._project.scan_result:
+            self._properties.set_parameter_suggestions(
+                self._project.scan_result.parameter_ids
+            )
 
     def _mark_live_dirty(self) -> None:
         self._live_preview.mark_dirty()
+        self._set_dirty(True)
 
     def _on_asset_clicked(self, asset_id: str, is_sprite: bool) -> None:
         if not self._project:
@@ -898,6 +1037,7 @@ class MainWindow(QMainWindow):
             self._refresh_canvas()
 
         self._undo.push(CallableCommand(do, undo))
+        self._set_dirty(True)
 
     def _align(self, mode: AlignMode) -> None:
         controls = self._selected_controls()
@@ -1041,6 +1181,9 @@ class MainWindow(QMainWindow):
             return
         screens_added, mapped = rescan_project(self._project)
         self._refresh_ui()
+        self._refresh_parameter_suggestions()
+        if mapped or screens_added:
+            self._set_dirty(True)
         msg = f"Rescan complete. {mapped} new mapping(s) added."
         if screens_added:
             msg += f" {screens_added} new screen(s) added."
@@ -1051,6 +1194,7 @@ class MainWindow(QMainWindow):
         if not self._project:
             return
         save_project(self._project)
+        self._set_dirty(False)
         report = validate_manifest(self._project.manifest, self._project.root)
         self._log_panel.set_validation(report)
 
@@ -1093,6 +1237,19 @@ class MainWindow(QMainWindow):
     def _refresh_git_status(self) -> None:
         if self._project:
             self._log_panel.set_git_status(get_status(self._project.root))
+
+    def _show_theme_colors(self) -> None:
+        if not self._project:
+            QMessageBox.information(self, "No project", "Open a project first.")
+            return
+        dlg = ThemeColorsDialog(self._project.manifest, self)
+        if dlg.exec():
+            changed = dlg.result_colors() != self._project.manifest.theme_colors
+            dlg.apply()
+            if changed:
+                self._set_dirty(True)
+                self._mark_live_dirty()
+            self._log_panel.append_log("Theme colors updated.")
 
     def _show_theme_diff(self) -> None:
         if not self._project:

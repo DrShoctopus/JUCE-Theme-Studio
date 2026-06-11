@@ -22,6 +22,17 @@ class UndoStack:
 
     def push(self, command: Command) -> None:
         command.execute()
+        self._register(command)
+
+    def push_applied(self, command: Command) -> None:
+        """Register a command whose effect has *already* been applied.
+
+        Use for edits that happen live in the UI (drag/resize, property fields)
+        where re-running ``execute()`` now would be redundant or disruptive.
+        """
+        self._register(command)
+
+    def _register(self, command: Command) -> None:
         self._undo.append(command)
         if len(self._undo) > self._max_depth:
             self._undo.pop(0)

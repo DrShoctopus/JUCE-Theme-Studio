@@ -1,4 +1,10 @@
-"""Theme export: JSON layout and generated JUCE C++ helpers."""
+"""Theme export: JSON layout and generated JUCE C++ helpers.
+
+The generated C++ is functional, not skeleton: ``ThemeAssets`` loads the exported
+images at runtime, ``ThemeLookAndFeel`` draws sprite frames for rotary sliders and
+buttons, and ``GeneratedThemeComponents`` builds a component that renders a whole
+screen straight from ``ThemeLayout.json``.
+"""
 
 from __future__ import annotations
 
@@ -25,6 +31,19 @@ class ExportResult:
     backup_dir: Path | None = None
 
 
+def _exported_asset_filename(relative_path: str) -> str:
+    """Filename an asset is copied to inside the export ``assets/`` folder."""
+    return Path(relative_path).name
+
+
+def _asset_filename_map(manifest: ThemeManifest) -> dict[str, str]:
+    """Map ``asset_id`` to its exported filename (under ``assets/``)."""
+    return {
+        asset.id: _exported_asset_filename(asset.relative_path)
+        for asset in manifest.assets
+    }
+
+
 def preview_export_files(manifest: ThemeManifest, project_root: Path) -> list[str]:
     """List relative paths that export would write (for preview dialog)."""
     project_root = project_root.resolve()
@@ -38,8 +57,7 @@ def preview_export_files(manifest: ThemeManifest, project_root: Path) -> list[st
 
     if manifest.export_settings.copy_assets:
         for asset in manifest.assets:
-            name = Path(asset.relative_path).name
-            files.append(f"{rel_export}/assets/{name}")
+            files.append(f"{rel_export}/assets/{_exported_asset_filename(asset.relative_path)}")
 
     if manifest.export_settings.export_cpp:
         for name in (
@@ -51,6 +69,7 @@ def preview_export_files(manifest: ThemeManifest, project_root: Path) -> list[st
             "GeneratedThemeComponents.cpp",
         ):
             files.append(f"{rel_export}/{name}")
+        files.append(f"{rel_export}/README-INTEGRATION.md")
 
     return files
 
@@ -90,7 +109,7 @@ def export_theme(
         for asset in manifest.assets:
             src = resolve_asset_path(project_root, asset)
             if src.is_file():
-                dest = assets_out / Path(asset.relative_path).name
+                dest = assets_out / _exported_asset_filename(asset.relative_path)
                 shutil.copy2(src, dest)
                 result.files_written.append(str(dest.relative_to(project_root)))
 
@@ -102,6 +121,7 @@ def export_theme(
             "ThemeLookAndFeel.cpp": _gen_lookandfeel_cpp(ns),
             "GeneratedThemeComponents.h": _gen_components_h(ns, manifest),
             "GeneratedThemeComponents.cpp": _gen_components_cpp(ns, manifest),
+            "README-INTEGRATION.md": _gen_integration_readme(ns, manifest),
         }
         for filename, content in cpp_files.items():
             path = export_dir / filename
@@ -125,8 +145,27 @@ def _write_cpp(path: Path, content: str, project_root: Path, result: ExportResul
 
 
 def _build_layout_json(manifest: ThemeManifest) -> dict:
+    asset_files = _asset_filename_map(manifest)
+
+    def control_json(c) -> dict:
+        return {
+            "name": c.name,
+            "type": c.control_type.value,
+            "bounds": {"x": c.x, "y": c.y, "width": c.width, "height": c.height},
+            "z_index": c.z_index,
+            "asset_id": c.asset_id,
+            "asset_file": asset_files.get(c.asset_id) if c.asset_id else None,
+            "sprite_config": c.sprite_config.to_dict() if c.sprite_config else None,
+            "mapping": c.mapping.to_dict(),
+            "label_text": c.label_text,
+            "value": c.preview_value,
+            "on": c.preview_on,
+        }
+
     return {
         "schema_version": manifest.schema_version,
+        "namespace": manifest.export_settings.namespace,
+        "colors": dict(manifest.theme_colors),
         "screens": [
             {
                 "name": s.name,
@@ -134,18 +173,11 @@ def _build_layout_json(manifest: ThemeManifest) -> dict:
                 "width": s.canvas_width,
                 "height": s.canvas_height,
                 "background_asset": s.background_asset_id,
+                "background_file": (
+                    asset_files.get(s.background_asset_id) if s.background_asset_id else None
+                ),
                 "controls": [
-                    {
-                        "name": c.name,
-                        "type": c.control_type.value,
-                        "bounds": {"x": c.x, "y": c.y, "width": c.width, "height": c.height},
-                        "z_index": c.z_index,
-                        "asset_id": c.asset_id,
-                        "sprite_config": c.sprite_config.to_dict() if c.sprite_config else None,
-                        "mapping": c.mapping.to_dict(),
-                        "label_text": c.label_text,
-                    }
-                    for c in sorted(s.controls, key=lambda x: x.z_index)
+                    control_json(c) for c in sorted(s.controls, key=lambda x: x.z_index)
                 ],
             }
             for s in manifest.screens
@@ -161,14 +193,41 @@ def _gen_theme_assets_h(ns: str) -> str:
 
 namespace {ns}
 {{
+/** A sprite strip/grid plus the metadata needed to slice it into frames. */
+struct SpriteStrip
+{{
+    juce::Image image;
+    int frameCount = 1;
+    int frameWidth = 0;
+    int frameHeight = 0;
+    int columns = 1;
+    juce::String layout {{ "horizontal_strip" }};
+
+    bool isValid() const noexcept {{ return image.isValid() && frameCount > 0; }}
+    juce::Image frame (int index) const;
+}};
+
+/** Runtime asset store. Loads images named in ThemeLayout.json from the
+    sibling "assets" folder and hands back sprite frames. */
 class ThemeAssets
 {{
 public:
-    static juce::Image getImage (const juce::String& assetId);
-    static juce::Image getSpriteFrame (const juce::String& assetId, int frameIndex,
-                                       int frameW, int frameH, int sheetW, int sheetH,
-                                       const juce::String& layout);
+    /** Parse a ThemeLayout.json file and load every referenced image. */
     static bool loadFromLayout (const juce::File& layoutJson);
+
+    /** The parsed layout document (void var until loadFromLayout succeeds). */
+    static const juce::var& getLayout();
+
+    /** A previously loaded image by its exported file name (e.g. "knob.png"). */
+    static juce::Image getImage (const juce::String& fileName);
+
+    /** Slice a single frame out of an already-loaded sheet. */
+    static juce::Image getSpriteFrame (const juce::Image& sheet, int frameIndex,
+                                       int frameW, int frameH, int columns,
+                                       const juce::String& layout);
+
+    /** Build a SpriteStrip from a control's "sprite_config" var. */
+    static SpriteStrip stripFromConfig (const juce::Image& sheet, const juce::var& spriteConfig);
 }};
 }}
 """
@@ -181,46 +240,115 @@ def _gen_theme_assets_cpp(ns: str) -> str:
 namespace {ns}
 {{
 static std::map<juce::String, juce::Image> g_themeImages;
+static juce::var g_layout;
 
-juce::Image ThemeAssets::getImage (const juce::String& assetId)
+juce::Image SpriteStrip::frame (int index) const
 {{
-    auto it = g_themeImages.find (assetId);
-    return it != g_themeImages.end() ? it->second : juce::Image();
-}}
-
-juce::Image ThemeAssets::getSpriteFrame (const juce::String& assetId, int frameIndex,
-                                         int frameW, int frameH, int sheetW, int sheetH,
-                                         const juce::String& layout)
-{{
-    auto sheet = getImage (assetId);
-    if (! sheet.isValid())
-        return {{}};
-
-    juce::ignoreUnused (sheetW, sheetH);
-    int x = 0;
-    int y = 0;
-    if (layout == "vertical_strip")
-    {{
-        y = frameIndex * frameH;
-    }}
-    else if (layout == "grid")
-    {{
-        const int cols = juce::jmax (1, sheetW / frameW);
-        x = (frameIndex % cols) * frameW;
-        y = (frameIndex / cols) * frameH;
-    }}
-    else
-    {{
-        x = frameIndex * frameW;
-    }}
-    return sheet.getClippedImage ({{ x, y, frameW, frameH }});
+    return ThemeAssets::getSpriteFrame (image, index, frameWidth, frameHeight, columns, layout);
 }}
 
 bool ThemeAssets::loadFromLayout (const juce::File& layoutJson)
 {{
-    // Load asset paths from ThemeLayout.json and populate g_themeImages.
-    juce::ignoreUnused (layoutJson);
+    g_themeImages.clear();
+    g_layout = juce::var();
+
+    if (! layoutJson.existsAsFile())
+        return false;
+
+    g_layout = juce::JSON::parse (layoutJson);
+    if (! g_layout.isObject())
+        return false;
+
+    const juce::File assetsDir = layoutJson.getParentDirectory().getChildFile ("assets");
+
+    auto loadImageFile = [&] (const juce::String& fileName)
+    {{
+        if (fileName.isEmpty() || g_themeImages.count (fileName) > 0)
+            return;
+        const juce::File f = assetsDir.getChildFile (fileName);
+        if (f.existsAsFile())
+        {{
+            auto img = juce::ImageFileFormat::loadFrom (f);
+            if (img.isValid())
+                g_themeImages[fileName] = img;
+        }}
+    }};
+
+    if (auto* screens = g_layout.getProperty ("screens", {{}}).getArray())
+    {{
+        for (auto& screen : *screens)
+        {{
+            loadImageFile (screen.getProperty ("background_file", "").toString());
+
+            if (auto* controls = screen.getProperty ("controls", {{}}).getArray())
+                for (auto& control : *controls)
+                    loadImageFile (control.getProperty ("asset_file", "").toString());
+        }}
+    }}
+
     return true;
+}}
+
+const juce::var& ThemeAssets::getLayout()
+{{
+    return g_layout;
+}}
+
+juce::Image ThemeAssets::getImage (const juce::String& fileName)
+{{
+    auto it = g_themeImages.find (fileName);
+    return it != g_themeImages.end() ? it->second : juce::Image();
+}}
+
+juce::Image ThemeAssets::getSpriteFrame (const juce::Image& sheet, int frameIndex,
+                                         int frameW, int frameH, int columns,
+                                         const juce::String& layout)
+{{
+    if (! sheet.isValid() || frameW <= 0 || frameH <= 0)
+        return {{}};
+
+    const int idx = juce::jmax (0, frameIndex);
+    int x = 0, y = 0;
+
+    if (layout == "vertical_strip")
+    {{
+        x = 0;
+        y = idx * frameH;
+    }}
+    else if (layout == "grid")
+    {{
+        const int cols = juce::jmax (1, columns);
+        x = (idx % cols) * frameW;
+        y = (idx / cols) * frameH;
+    }}
+    else // horizontal_strip
+    {{
+        x = idx * frameW;
+        y = 0;
+    }}
+
+    const juce::Rectangle<int> area (x, y, frameW, frameH);
+    const juce::Rectangle<int> clamped = area.getIntersection (sheet.getBounds());
+    return sheet.getClippedImage (clamped);
+}}
+
+SpriteStrip ThemeAssets::stripFromConfig (const juce::Image& sheet, const juce::var& spriteConfig)
+{{
+    SpriteStrip strip;
+    strip.image = sheet;
+    if (spriteConfig.isObject())
+    {{
+        strip.frameCount  = (int) spriteConfig.getProperty ("frame_count", 1);
+        strip.frameWidth  = (int) spriteConfig.getProperty ("frame_width", 0);
+        strip.frameHeight = (int) spriteConfig.getProperty ("frame_height", 0);
+        strip.columns     = (int) spriteConfig.getProperty ("columns", 1);
+        strip.layout      = spriteConfig.getProperty ("layout", "horizontal_strip").toString();
+    }}
+    if (strip.frameWidth <= 0 && sheet.isValid())
+        strip.frameWidth = sheet.getWidth() / juce::jmax (1, strip.frameCount);
+    if (strip.frameHeight <= 0 && sheet.isValid())
+        strip.frameHeight = sheet.getHeight();
+    return strip;
 }}
 }}
 """
@@ -235,9 +363,20 @@ def _gen_lookandfeel_h(ns: str) -> str:
 
 namespace {ns}
 {{
+/** LookAndFeel that draws rotary sliders and buttons from sprite strips.
+
+    Assign strips with setKnobStrip()/setButtonStrip(); without them it falls
+    back to the JUCE defaults. Call applyColours() to push the exported theme
+    palette onto the standard JUCE ColourIds. */
 class ThemeLookAndFeel : public juce::LookAndFeel_V4
 {{
 public:
+    void setKnobStrip (SpriteStrip strip)   {{ knobStrip = std::move (strip); }}
+    void setButtonStrip (SpriteStrip strip) {{ buttonStrip = std::move (strip); }}
+
+    /** Apply a "colors" object (from ThemeLayout.json) to JUCE ColourIds. */
+    void applyColours (const juce::var& colours);
+
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
                            float sliderPos, float rotaryStartAngle, float rotaryEndAngle,
                            juce::Slider& slider) override;
@@ -245,6 +384,10 @@ public:
                                const juce::Colour& backgroundColour,
                                bool shouldDrawButtonAsHighlighted,
                                bool shouldDrawButtonAsDown) override;
+
+private:
+    SpriteStrip knobStrip;
+    SpriteStrip buttonStrip;
 }};
 }}
 """
@@ -256,13 +399,57 @@ def _gen_lookandfeel_cpp(ns: str) -> str:
 
 namespace {ns}
 {{
+static juce::Colour colourFromHex (const juce::var& value, juce::Colour fallback)
+{{
+    const juce::String hex = value.toString();
+    if (hex.isEmpty())
+        return fallback;
+    return juce::Colour ((juce::uint32) hex.getHexValue64());
+}}
+
+void ThemeLookAndFeel::applyColours (const juce::var& colours)
+{{
+    if (! colours.isObject())
+        return;
+
+    const auto background = colourFromHex (colours.getProperty ("background", {{}}),
+                                           juce::Colour (0xff1e1e1e));
+    const auto surface = colourFromHex (colours.getProperty ("surface", {{}}),
+                                        juce::Colour (0xff282c34));
+    const auto primary = colourFromHex (colours.getProperty ("primary", {{}}),
+                                        juce::Colour (0xff61afef));
+    const auto text = colourFromHex (colours.getProperty ("text", {{}}),
+                                     juce::Colour (0xffd0d0d0));
+
+    setColour (juce::ResizableWindow::backgroundColourId, background);
+    setColour (juce::Slider::rotarySliderFillColourId, primary);
+    setColour (juce::Slider::thumbColourId, primary);
+    setColour (juce::Slider::textBoxTextColourId, text);
+    setColour (juce::TextButton::buttonColourId, surface);
+    setColour (juce::TextButton::textColourOnId, text);
+    setColour (juce::TextButton::textColourOffId, text);
+    setColour (juce::Label::textColourId, text);
+}}
+
 void ThemeLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
                                          float sliderPos, float rotaryStartAngle,
                                          float rotaryEndAngle, juce::Slider& slider)
 {{
-    juce::ignoreUnused (g, x, y, width, height, sliderPos,
-                        rotaryStartAngle, rotaryEndAngle, slider);
-    // Draw sprite knob frame based on sliderPos and ThemeAssets.
+    if (knobStrip.isValid())
+    {{
+        const int last = juce::jmax (0, knobStrip.frameCount - 1);
+        const int frameIndex = juce::roundToInt (sliderPos * (float) last);
+        const juce::Image frame = knobStrip.frame (frameIndex);
+        if (frame.isValid())
+        {{
+            g.drawImage (frame, juce::Rectangle<int> (x, y, width, height).toFloat(),
+                         juce::RectanglePlacement::centred);
+            return;
+        }}
+    }}
+
+    LookAndFeel_V4::drawRotarySlider (g, x, y, width, height, sliderPos,
+                                      rotaryStartAngle, rotaryEndAngle, slider);
 }}
 
 void ThemeLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& button,
@@ -270,9 +457,25 @@ void ThemeLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& bu
                                              bool shouldDrawButtonAsHighlighted,
                                              bool shouldDrawButtonAsDown)
 {{
-    juce::ignoreUnused (g, button, backgroundColour,
-                        shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
-    // Draw sprite button state from ThemeAssets.
+    if (buttonStrip.isValid())
+    {{
+        int frameIndex = 0;                       // default / off
+        if (shouldDrawButtonAsDown || button.getToggleState())
+            frameIndex = juce::jmin (2, buttonStrip.frameCount - 1);  // active / on
+        else if (shouldDrawButtonAsHighlighted)
+            frameIndex = juce::jmin (1, buttonStrip.frameCount - 1);  // hover
+
+        const juce::Image frame = buttonStrip.frame (frameIndex);
+        if (frame.isValid())
+        {{
+            g.drawImage (frame, button.getLocalBounds().toFloat(),
+                         juce::RectanglePlacement::stretchToFit);
+            return;
+        }}
+    }}
+
+    LookAndFeel_V4::drawButtonBackground (g, button, backgroundColour,
+                                          shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
 }}
 }}
 """
@@ -280,22 +483,61 @@ void ThemeLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& bu
 
 def _gen_components_h(ns: str, manifest: ThemeManifest) -> str:
     lines = [
-        GENERATED_BANNER,
+        GENERATED_BANNER.rstrip("\n"),
         "#pragma once",
         "",
         "#include <JuceHeader.h>",
-        "#include \"ThemeAssets.h\"",
+        '#include "ThemeAssets.h"',
+        '#include "ThemeLookAndFeel.h"',
         "",
         f"namespace {ns}",
         "{",
-        "/** Apply exported bounds to a component tree. */",
-        "void applyScreenLayout (juce::Component& root, const juce::String& screenName);",
+        "/** Renders a single screen from ThemeLayout.json: paints the background,",
+        "    then every control's sprite frame / label at its exported bounds. Drop",
+        "    this straight into a plugin editor, or use it as a live preview. */",
+        "class ThemeScreenComponent : public juce::Component",
+        "{",
+        "public:",
+        "    /** @param layoutJson  path to the exported ThemeLayout.json",
+        "        @param screenName  screen to show (empty = first screen). */",
+        "    ThemeScreenComponent (const juce::File& layoutJson,"
+        " const juce::String& screenName = {});",
+        "",
+        "    /** Reload from disk (e.g. after a re-export) and repaint. */",
+        "    void reload();",
+        "",
+        "    void paint (juce::Graphics&) override;",
+        "",
+        "    juce::String getScreenName() const { return screenName; }",
+        '    int designWidth() const  { return (int) screen.getProperty ("width", 0); }',
+        '    int designHeight() const { return (int) screen.getProperty ("height", 0); }',
+        "",
+        "private:",
+        "    void drawControl (juce::Graphics&, const juce::var& control);",
+        "    int frameIndexFor (const juce::var& control, const juce::var& spriteConfig) const;",
+        "",
+        "    juce::File layoutFile;",
+        "    juce::String screenName;",
+        "    juce::var screen;",
+        "    ThemeLookAndFeel laf;",
+        "",
+        "    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ThemeScreenComponent)",
+        "};",
+        "",
+        "/** Position existing children of @p root by control name/cpp_variable using",
+        "    the bounds in @p layoutJson for the named screen. Use this when you keep",
+        "    your own juce::Components and just want Theme Studio to lay them out. */",
+        "void applyScreenLayout (juce::Component& root, const juce::File& layoutJson,",
+        "                        const juce::String& screenName);",
         "",
     ]
     for screen in manifest.screens:
         safe = _safe_cpp(screen.juce_component or screen.name)
         lines.append(f"// Screen: {screen.name} ({screen.canvas_width}x{screen.canvas_height})")
-        lines.append(f"struct {safe}Layout {{ static void apply (juce::Component& root); }};")
+        lines.append(
+            f"struct {safe}Layout {{ "
+            f"static void apply (juce::Component& root, const juce::File& layoutJson); }};"
+        )
         lines.append("")
     lines.append("}")
     return "\n".join(lines) + "\n"
@@ -303,40 +545,252 @@ def _gen_components_h(ns: str, manifest: ThemeManifest) -> str:
 
 def _gen_components_cpp(ns: str, manifest: ThemeManifest) -> str:
     lines = [
-        GENERATED_BANNER,
+        GENERATED_BANNER.rstrip("\n"),
         '#include "GeneratedThemeComponents.h"',
         "",
         f"namespace {ns}",
         "{",
+        "static juce::var findScreen (const juce::var& layout, const juce::String& name)",
+        "{",
+        '    if (auto* screens = layout.getProperty ("screens", {}).getArray())',
+        "    {",
+        "        for (auto& s : *screens)",
+        '            if (name.isEmpty() || s.getProperty ("name", {}).toString() == name)',
+        "                return s;",
+        "        if (! screens->isEmpty())",
+        "            return screens->getFirst();",
+        "    }",
+        "    return {};",
+        "}",
+        "",
+        "static juce::Rectangle<int> boundsOf (const juce::var& control)",
+        "{",
+        '    auto* b = control.getProperty ("bounds", {}).getDynamicObject();',
+        "    if (b == nullptr)",
+        "        return {};",
+        '    return {{ (int) b->getProperty ("x"), (int) b->getProperty ("y"),',
+        '             (int) b->getProperty ("width"), (int) b->getProperty ("height") }};',
+        "}",
+        "",
+        "ThemeScreenComponent::ThemeScreenComponent (const juce::File& layoutJson,",
+        "                                            const juce::String& name)",
+        "    : layoutFile (layoutJson), screenName (name)",
+        "{",
+        "    setLookAndFeel (&laf);",
+        "    reload();",
+        "}",
+        "",
+        "void ThemeScreenComponent::reload()",
+        "{",
+        "    ThemeAssets::loadFromLayout (layoutFile);",
+        "    const juce::var& layout = ThemeAssets::getLayout();",
+        '    laf.applyColours (layout.getProperty ("colors", {}));',
+        "    screen = findScreen (layout, screenName);",
+        '    screenName = screen.getProperty ("name", screenName).toString();',
+        '    const int w = (int) screen.getProperty ("width", 800);',
+        '    const int h = (int) screen.getProperty ("height", 600);',
+        "    setSize (juce::jmax (1, w), juce::jmax (1, h));",
+        "    repaint();",
+        "}",
+        "",
+        "int ThemeScreenComponent::frameIndexFor (const juce::var& control,",
+        "                                         const juce::var& spriteConfig) const",
+        "{",
+        '    const juce::String type = control.getProperty ("type", {}).toString();',
+        '    const int frameCount = juce::jmax (1, (int) spriteConfig.getProperty ("frame_count", 1));',  # noqa: E501
+        '    const int defaultFrame = (int) spriteConfig.getProperty ("default_frame", 0);',
+        '    const bool on = (bool) control.getProperty ("on", false);',
+        '    const double value = (double) control.getProperty ("value", 0.0);',
+        "",
+        '    if (type == "button" || type == "toggle_button" || type == "switch" || type == "led")',
+        "    {",
+        '        const juce::var active = spriteConfig.getProperty ("active_frame", {});',
+        "        if (on && ! active.isVoid())",
+        "            return (int) active;",
+        "        return defaultFrame;",
+        "    }",
+        "",
+        "    // knob / slider / meters: map normalised value onto the frame range.",
+        "    const double v = juce::jlimit (0.0, 1.0, value);",
+        "    return juce::jlimit (0, frameCount - 1, juce::roundToInt (v * (frameCount - 1)));",
+        "}",
+        "",
+        "void ThemeScreenComponent::drawControl (juce::Graphics& g, const juce::var& control)",
+        "{",
+        "    const juce::Rectangle<int> bounds = boundsOf (control);",
+        "    if (bounds.isEmpty())",
+        "        return;",
+        '    const juce::String type = control.getProperty ("type", {}).toString();',
+        "",
+        '    if (type == "label")',
+        "    {",
+        "        g.setColour (findColour (juce::Label::textColourId, true));",
+        '        const juce::String text = control.getProperty ("label_text", {}).toString();',
+        '        g.drawText (text.isNotEmpty() ? text : control.getProperty ("name", {}).toString(),',  # noqa: E501
+        "                    bounds, juce::Justification::centred, true);",
+        "        return;",
+        "    }",
+        "",
+        '    const juce::String assetFile = control.getProperty ("asset_file", {}).toString();',
+        "    const juce::Image sheet = ThemeAssets::getImage (assetFile);",
+        '    const juce::var spriteConfig = control.getProperty ("sprite_config", {});',
+        "",
+        "    if (sheet.isValid() && spriteConfig.isObject())",
+        "    {",
+        "        const SpriteStrip strip = ThemeAssets::stripFromConfig (sheet, spriteConfig);",
+        "        const juce::Image frame = strip.frame (frameIndexFor (control, spriteConfig));",
+        "        if (frame.isValid())",
+        "        {",
+        "            g.drawImage (frame, bounds.toFloat(), juce::RectanglePlacement::centred);",
+        "            return;",
+        "        }",
+        "    }",
+        "",
+        "    if (sheet.isValid())",
+        "    {",
+        "        g.drawImage (sheet, bounds.toFloat(), juce::RectanglePlacement::centred);",
+        "        return;",
+        "    }",
+        "",
+        "    g.setColour (findColour (juce::Slider::rotarySliderFillColourId, true).withAlpha (0.35f));",  # noqa: E501
+        "    g.fillRect (bounds);",
+        "    g.setColour (juce::Colours::black.withAlpha (0.4f));",
+        "    g.drawRect (bounds);",
+        "}",
+        "",
+        "void ThemeScreenComponent::paint (juce::Graphics& g)",
+        "{",
+        "    g.fillAll (findColour (juce::ResizableWindow::backgroundColourId, true));",
+        "",
+        '    const juce::String bgFile = screen.getProperty ("background_file", {}).toString();',
+        "    const juce::Image bg = ThemeAssets::getImage (bgFile);",
+        "    if (bg.isValid())",
+        "        g.drawImage (bg, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);",  # noqa: E501
+        "",
+        '    if (auto* controls = screen.getProperty ("controls", {}).getArray())',
+        "        for (auto& control : *controls)",
+        "            drawControl (g, control);",
+        "}",
+        "",
+        "void applyScreenLayout (juce::Component& root, const juce::File& layoutJson,",
+        "                        const juce::String& screenName)",
+        "{",
+        "    ThemeAssets::loadFromLayout (layoutJson);",
+        "    const juce::var screen = findScreen (ThemeAssets::getLayout(), screenName);",
+        '    auto* controls = screen.getProperty ("controls", {}).getArray();',
+        "    if (controls == nullptr)",
+        "        return;",
+        "",
+        "    for (auto& control : *controls)",
+        "    {",
+        "        const juce::Rectangle<int> bounds = boundsOf (control);",
+        '        const auto mapping = control.getProperty ("mapping", {});',
+        '        juce::String id = mapping.getProperty ("cpp_variable", {}).toString();',
+        "        if (id.isEmpty())",
+        '            id = control.getProperty ("name", {}).toString();',
+        "",
+        "        if (auto* comp = root.findChildWithID (id))",
+        "            comp->setBounds (bounds);",
+        "    }",
+        "}",
+        "",
     ]
     for screen in manifest.screens:
         safe = _safe_cpp(screen.juce_component or screen.name)
-        lines.append(f"void {safe}Layout::apply (juce::Component& root)")
-        lines.append("{")
+        name_lit = screen.name.replace("\\", "\\\\").replace('"', '\\"')
         lines.append(
-            "    // Controls must use setComponentID() matching cpp_variable for findChildWithID."
+            f"void {safe}Layout::apply (juce::Component& root, const juce::File& layoutJson)"
         )
-        for c in screen.controls:
-            var = c.mapping.cpp_variable or c.name
-            lines.append(
-                f"    // {c.control_type.value}: {c.name} "
-                f"setBounds({c.x}, {c.y}, {c.width}, {c.height});"
-            )
-            lines.append(
-                f"    if (auto* comp = root.findChildWithID (\"{var}\"))"
-            )
-            lines.append(
-                f"        comp->setBounds ({c.x}, {c.y}, {c.width}, {c.height});"
-            )
+        lines.append("{")
+        lines.append(f'    applyScreenLayout (root, layoutJson, "{name_lit}");')
         lines.append("}")
         lines.append("")
-    lines.append("void applyScreenLayout (juce::Component& root, const juce::String& screenName)")
-    lines.append("{")
-    lines.append("    juce::ignoreUnused (root, screenName);")
-    lines.append("    // Dispatch to screen-specific layout helpers.")
-    lines.append("}")
     lines.append("}")
     return "\n".join(lines) + "\n"
+
+
+def _gen_integration_readme(ns: str, manifest: ThemeManifest) -> str:
+    sub = manifest.export_settings.output_subdir
+    screen_lines = "\n".join(
+        f"- `{s.name}` ({s.canvas_width}×{s.canvas_height})" for s in manifest.screens
+    ) or "- (no screens yet)"
+    return f"""# Integrating this exported theme
+
+Generated by JUCE Theme Studio. These files render the theme defined in
+`ThemeLayout.json`; your original project sources are never modified.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `ThemeLayout.json` | Layout + sprite + colour data, read at runtime |
+| `assets/` | Copied images referenced by the layout |
+| `ThemeAssets.{{h,cpp}}` | Loads images and slices sprite frames |
+| `ThemeLookAndFeel.{{h,cpp}}` | Sprite knobs/buttons + palette colours |
+| `GeneratedThemeComponents.{{h,cpp}}` | `ThemeScreenComponent` + `applyScreenLayout()` |
+
+Screens in this export:
+{screen_lines}
+
+## CMake
+
+Add the generated sources to your target and ship the JSON + assets next to the
+binary (here, copied into the build output):
+
+```cmake
+target_sources(YourPlugin PRIVATE
+    {sub}/ThemeAssets.cpp
+    {sub}/ThemeLookAndFeel.cpp
+    {sub}/GeneratedThemeComponents.cpp)
+
+target_include_directories(YourPlugin PRIVATE {sub})
+
+# Make ThemeLayout.json + assets/ available beside the binary at runtime.
+add_custom_command(TARGET YourPlugin POST_BUILD
+    COMMAND ${{CMAKE_COMMAND}} -E copy
+        ${{CMAKE_CURRENT_SOURCE_DIR}}/{sub}/ThemeLayout.json
+        $<TARGET_FILE_DIR:YourPlugin>/ThemeLayout.json
+    COMMAND ${{CMAKE_COMMAND}} -E copy_directory
+        ${{CMAKE_CURRENT_SOURCE_DIR}}/{sub}/assets
+        $<TARGET_FILE_DIR:YourPlugin>/assets)
+```
+
+(For a self-contained binary, add the images to a `juce_add_binary_data` target
+instead and load them through `BinaryData` rather than the `assets/` folder.)
+
+## Usage
+
+Render a whole screen straight from the layout:
+
+```cpp
+#include "GeneratedThemeComponents.h"
+
+class YourEditor : public juce::AudioProcessorEditor
+{{
+public:
+    YourEditor (YourProcessor& p)
+        : juce::AudioProcessorEditor (p),
+          theme (juce::File::getSpecialLocation (juce::File::currentExecutableFile)
+                     .getParentDirectory().getChildFile ("ThemeLayout.json"))
+    {{
+        addAndMakeVisible (theme);
+        setSize (theme.designWidth(), theme.designHeight());
+    }}
+
+    void resized() override {{ theme.setBounds (getLocalBounds()); }}
+
+private:
+    {ns}::ThemeScreenComponent theme;
+}};
+```
+
+Or keep your own components and let Theme Studio lay them out by matching each
+component's `setComponentID(...)` to the control's C++ variable / name:
+
+```cpp
+{ns}::applyScreenLayout (*this, layoutFile, "MainComponent");
+```
+"""
 
 
 def _safe_cpp(name: str) -> str:

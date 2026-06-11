@@ -10,6 +10,18 @@ from typing import Any
 from juce_theme_studio.core.controls import Control
 from juce_theme_studio.core.types import SCHEMA_VERSION
 
+# Default theme palette. Values are ARGB hex strings ("aarrggbb") understood by
+# juce::Colour. Keys are mapped to JUCE ColourIds by the generated LookAndFeel.
+DEFAULT_THEME_COLORS: dict[str, str] = {
+    "background": "ff1e1e1e",
+    "surface": "ff282c34",
+    "primary": "ff61afef",
+    "text": "ffd0d0d0",
+    "meter": "ff4ec9b0",
+    "meterWarning": "ffd7ba7d",
+    "meterClip": "ffe06c75",
+}
+
 
 @dataclass
 class Screen:
@@ -133,6 +145,7 @@ class ThemeManifest:
     last_opened_screen_id: str | None = None
     grid_size: int = 8
     snap_to_grid: bool = True
+    theme_colors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_THEME_COLORS))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -144,10 +157,14 @@ class ThemeManifest:
             "last_opened_screen_id": self.last_opened_screen_id,
             "grid_size": self.grid_size,
             "snap_to_grid": self.snap_to_grid,
+            "theme_colors": dict(self.theme_colors),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ThemeManifest:
+        colors = dict(DEFAULT_THEME_COLORS)
+        for key, value in dict(data.get("theme_colors", {})).items():
+            colors[str(key)] = str(value)
         return cls(
             schema_version=str(data.get("schema_version", SCHEMA_VERSION)),
             project_root=str(data.get("project_root", ".")),
@@ -157,6 +174,7 @@ class ThemeManifest:
             last_opened_screen_id=data.get("last_opened_screen_id"),
             grid_size=int(data.get("grid_size", 8)),
             snap_to_grid=bool(data.get("snap_to_grid", True)),
+            theme_colors=colors,
         )
 
     def save(self, path: Path) -> None:

@@ -60,6 +60,50 @@ class ScanResult:
     image_assets: list[str] = field(default_factory=list)
     cpp_files: list[str] = field(default_factory=list)
     screens: list[DetectedScreen] = field(default_factory=list)
+    # APVTS parameter IDs found anywhere in the project.
+    parameter_ids: list[str] = field(default_factory=list)
+    # Component C++ variable -> parameter ID, from APVTS *Attachment constructors.
+    attachments: dict[str, str] = field(default_factory=dict)
+
+
+# juce::AudioParameterFloat ("gain", ...) or with a ParameterID{ "gain", 1 } wrapper,
+# including std::make_unique<juce::AudioParameterFloat>(...).
+PARAM_DEF_PATTERN = re.compile(
+    r"AudioParameter(?:Float|Bool|Int|Choice|Double)\s*>?\s*\(\s*"
+    r'(?:(?:juce::)?ParameterID\s*\{\s*)?"([^"]+)"'
+)
+# Old-style APVTS createAndAddParameter ("gain", ...).
+PARAM_LEGACY_PATTERN = re.compile(r'createAndAddParameter\s*\(\s*"([^"]+)"')
+# SliderAttachment (apvts, "gain", gainSlider) — also Button/ComboBox, and the
+# std::make_unique<...Attachment>(...) form. Captures (paramID, componentVar).
+ATTACHMENT_PATTERN = re.compile(
+    r'(?:Slider|Button|ComboBox)Attachment\s*>?\s*[({]\s*'
+    r'[\w:.\->()]+\s*,\s*"([^"]+)"\s*,\s*&?\s*(\w+)'
+)
+
+
+def extract_parameters(text: str) -> tuple[list[str], dict[str, str]]:
+    """Return (parameter_ids, {component_variable: parameter_id}) from C++ source."""
+    param_ids: list[str] = []
+    seen: set[str] = set()
+
+    def add(pid: str) -> None:
+        if pid and pid not in seen:
+            seen.add(pid)
+            param_ids.append(pid)
+
+    for match in PARAM_DEF_PATTERN.finditer(text):
+        add(match.group(1))
+    for match in PARAM_LEGACY_PATTERN.finditer(text):
+        add(match.group(1))
+
+    attachments: dict[str, str] = {}
+    for match in ATTACHMENT_PATTERN.finditer(text):
+        param_id, variable = match.group(1), match.group(2)
+        add(param_id)
+        attachments[variable] = param_id
+
+    return param_ids, attachments
 
 
 def _rel(path: Path, root: Path) -> str:
@@ -115,12 +159,26 @@ def scan_juce_project(project_root: Path) -> ScanResult:
         ]
 
     seen_classes: set[str] = set()
+    param_seen: set[str] = set()
     for cpp in cpp_files:
         result.cpp_files.append(_rel(cpp, project_root))
         screen = _analyze_cpp_file(cpp, project_root)
         if screen is not None and screen.class_name not in seen_classes:
             seen_classes.add(screen.class_name)
             result.screens.append(screen)
+
+        # APVTS parameter IDs and attachments can live in any source file
+        # (definitions in the processor, attachments in the editor).
+        try:
+            text = cpp.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        param_ids, attachments = extract_parameters(text)
+        for pid in param_ids:
+            if pid not in param_seen:
+                param_seen.add(pid)
+                result.parameter_ids.append(pid)
+        result.attachments.update(attachments)
 
     return result
 

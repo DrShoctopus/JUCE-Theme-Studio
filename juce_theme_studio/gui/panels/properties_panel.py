@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
@@ -23,7 +24,8 @@ from juce_theme_studio.core.types import SpriteLayout
 
 
 class PropertiesPanel(QWidget):
-    properties_changed = Signal()
+    properties_changed = Signal()  # live: refresh canvas as fields change
+    edit_committed = Signal()  # checkpoint: an edit finished, push an undo entry
 
     def __init__(self) -> None:
         super().__init__()
@@ -163,6 +165,42 @@ class PropertiesPanel(QWidget):
         layout.addWidget(scroll)
         self._placeholder = QLabel("Select a control to edit properties.")
         layout.addWidget(self._placeholder)
+
+        self._wire_commit_signals()
+
+    def _wire_commit_signals(self) -> None:
+        """Emit edit_committed when an edit *finishes*, for undo checkpoints.
+
+        Live ``valueChanged``/``editingFinished`` handlers above keep the model and
+        canvas in sync continuously; these connections add one undo entry per edit
+        rather than one per spinbox tick.
+        """
+        for spin in (
+            self._x, self._y, self._w, self._h,
+            self._frame_count, self._frame_w, self._frame_h,
+            self._start_angle, self._end_angle,
+            self._default_frame, self._hover_frame, self._active_frame,
+            self._disabled_frame, self._preview_value,
+        ):
+            spin.editingFinished.connect(self._commit)
+        for line in (self._name, self._label_text, self._juce_class,
+                     self._cpp_var, self._param_id):
+            line.editingFinished.connect(self._commit)
+        for check in (self._aspect, self._visible, self._locked, self._preview_on):
+            check.toggled.connect(self._commit)
+        self._sprite_layout.currentIndexChanged.connect(self._commit)
+
+    def _commit(self) -> None:
+        if self._block or not self._control:
+            return
+        self.edit_committed.emit()
+
+    def set_parameter_suggestions(self, parameter_ids: list[str]) -> None:
+        """Offer scanned APVTS parameter ids as autocomplete on the param field."""
+        completer = QCompleter(list(parameter_ids), self)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._param_id.setCompleter(completer)
 
     def set_control(self, control: Control | None) -> None:
         self._control = control

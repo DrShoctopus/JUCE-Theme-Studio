@@ -35,9 +35,13 @@ from juce_theme_studio.gui.widgets.asset_list import MIME_ASSET_ID, MIME_ASSET_S
 class CanvasScene(QGraphicsScene):
     control_moved = Signal(str)
     control_clicked = Signal(str)  # control id
+    # Emitted on mouse release after a drag/resize, carrying the pre-edit geometry
+    # snapshot {control_id: (x, y, width, height)} so an undo command can be built.
+    geometry_committed = Signal(dict)
 
     def __init__(self, manifest: ThemeManifest, project_root: Path) -> None:
         super().__init__()
+        self._drag_snapshot: dict[str, tuple[int, int, int, int]] = {}
         self.manifest = manifest
         self.project_root = project_root
         self.screen: Screen | None = None
@@ -135,6 +139,32 @@ class CanvasScene(QGraphicsScene):
             if isinstance(item, ControlGraphicsItem):
                 return item.control
         return None
+
+    def _geometry_snapshot(self) -> dict[str, tuple[int, int, int, int]]:
+        return {
+            cid: (item.control.x, item.control.y, item.control.width, item.control.height)
+            for cid, item in self._items.items()
+        }
+
+    def mousePressEvent(self, event) -> None:  # noqa: ANN001
+        # Snapshot geometry before any drag/resize so we can build an undo command.
+        if not self.preview_mode:
+            self._drag_snapshot = self._geometry_snapshot()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
+        super().mouseReleaseEvent(event)
+        if not self._drag_snapshot:
+            return
+        after = self._geometry_snapshot()
+        changed = {
+            cid: before
+            for cid, before in self._drag_snapshot.items()
+            if cid in after and after[cid] != before
+        }
+        self._drag_snapshot = {}
+        if changed:
+            self.geometry_committed.emit(changed)
 
     def snap_control(self, control: Control, x: float, y: float):
         if self.screen is None:

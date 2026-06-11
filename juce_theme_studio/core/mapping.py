@@ -19,8 +19,18 @@ _JUCE_TYPE_MAP: dict[str, ControlType] = {
 }
 
 
-def apply_scanned_mappings(screen: Screen, detected: DetectedScreen) -> int:
-    """Add placeholder controls for scanned C++ members not already mapped."""
+def apply_scanned_mappings(
+    screen: Screen,
+    detected: DetectedScreen,
+    attachments: dict[str, str] | None = None,
+) -> int:
+    """Add placeholder controls for scanned C++ members not already mapped.
+
+    ``attachments`` maps a component's C++ variable to its APVTS parameter id
+    (from ``*Attachment`` constructors); matching controls get their
+    ``parameter_id`` filled in automatically.
+    """
+    attachments = attachments or {}
     existing_vars = {
         c.mapping.cpp_variable for c in screen.controls if c.mapping.cpp_variable
     }
@@ -40,13 +50,27 @@ def apply_scanned_mappings(screen: Screen, detected: DetectedScreen) -> int:
         control.mapping = ControlMapping(
             juce_class=det.juce_class,
             cpp_variable=det.cpp_variable,
+            parameter_id=attachments.get(det.cpp_variable, ""),
             screen_name=screen.name,
         )
         control.z_index = len(screen.controls)
         screen.controls.append(control)
         existing_vars.add(det.cpp_variable)
         added += 1
+
+    _backfill_parameter_ids(screen, attachments)
     return added
+
+
+def _backfill_parameter_ids(screen: Screen, attachments: dict[str, str]) -> int:
+    """Fill empty parameter_id on existing controls from detected attachments."""
+    filled = 0
+    for control in screen.controls:
+        var = control.mapping.cpp_variable
+        if var and not control.mapping.parameter_id and var in attachments:
+            control.mapping.parameter_id = attachments[var]
+            filled += 1
+    return filled
 
 
 def sync_scan_mappings(manifest_screens: list[Screen], scan: ScanResult) -> int:
@@ -58,5 +82,5 @@ def sync_scan_mappings(manifest_screens: list[Screen], scan: ScanResult) -> int:
             continue
         detected = by_component.get(screen.juce_component)
         if detected:
-            total += apply_scanned_mappings(screen, detected)
+            total += apply_scanned_mappings(screen, detected, scan.attachments)
     return total

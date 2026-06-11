@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -86,6 +87,29 @@ class Control:
             "preview_on": self.preview_on,
             "label_text": self.label_text,
         }
+
+    def assign_from(self, other: Control) -> None:
+        """Copy all editable fields from another control, keeping this id/identity.
+
+        Used to apply undo/redo snapshots in place so that canvas items and other
+        holders of this Control reference still see the change.
+        """
+        self.name = other.name
+        self.control_type = other.control_type
+        self.x = other.x
+        self.y = other.y
+        self.width = other.width
+        self.height = other.height
+        self.z_index = other.z_index
+        self.locked = other.locked
+        self.visible = other.visible
+        self.aspect_locked = other.aspect_locked
+        self.asset_id = other.asset_id
+        self.sprite_config = copy.deepcopy(other.sprite_config)
+        self.mapping = copy.deepcopy(other.mapping)
+        self.preview_value = other.preview_value
+        self.preview_on = other.preview_on
+        self.label_text = other.label_text
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Control:

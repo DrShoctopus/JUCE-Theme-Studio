@@ -61,3 +61,19 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest
 - [x] Drag-and-drop assets onto canvas (`gui/widgets/asset_list.py`)
 - [x] Theme version diffing (`core/theme_diff.py`, `ThemeDiffDialog`)
 - [x] Live JUCE preview bridge + `examples/juce_live_preview/` companion app
+
+## Phase 9 — Runtime Fidelity ✅
+
+- [x] Functional generated C++ — `ThemeAssets` loads images + slices frames,
+      `ThemeLookAndFeel` draws sprite knobs/buttons and applies palette colours,
+      `ThemeScreenComponent` renders a whole screen from `ThemeLayout.json`
+      (`juce/exporter.py`)
+- [x] Self-describing layout JSON (asset filenames, preview state, colours) +
+      generated `README-INTEGRATION.md` with a CMake snippet
+- [x] Live preview companion actually renders the layout and auto-reloads
+      (`examples/juce_live_preview/Source/Main.cpp`)
+- [x] Undo/redo for drag-move, resize, and all Properties-panel edits; dirty-state
+      tracking with window-title marker and save-on-close/switch prompt
+- [x] Theme colour palette + editor (`Project → Theme Colors…`)
+- [x] APVTS parameter-id scanning: auto-fills `parameter_id` from `*Attachment`
+      constructors and offers IDs as autocomplete (`juce/scanner.py`)
