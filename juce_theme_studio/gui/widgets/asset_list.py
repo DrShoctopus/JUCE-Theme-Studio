@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QMimeData, Qt, Signal
-from PySide6.QtGui import QDrag
+from PySide6.QtGui import QDrag, QKeyEvent
 from PySide6.QtWidgets import QListWidget, QListWidgetItem
 
 MIME_ASSET_ID = "application/x-juce-asset-id"
@@ -11,20 +11,31 @@ MIME_ASSET_SPRITE = "application/x-juce-asset-sprite"
 
 
 class AssetListWidget(QListWidget):
-    asset_clicked = Signal(str, bool)  # asset_id, is_sprite
+    delete_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self.setDragEnabled(True)
         self.setDefaultDropAction(Qt.DropAction.CopyAction)
-        self.itemClicked.connect(self._on_item_clicked)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
 
-    def _on_item_clicked(self, item: QListWidgetItem) -> None:
-        asset_id = item.data(Qt.ItemDataRole.UserRole)
-        if not asset_id:
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self.delete_requested.emit()
+            event.accept()
             return
-        is_sprite = bool(item.data(Qt.ItemDataRole.UserRole + 1))
-        self.asset_clicked.emit(str(asset_id), is_sprite)
+        super().keyPressEvent(event)
+
+    def _show_context_menu(self, pos) -> None:  # noqa: ANN001
+        if self.itemAt(pos) is None:
+            return
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        delete_act = menu.addAction("Delete Asset")
+        delete_act.triggered.connect(self.delete_requested.emit)
+        menu.exec(self.mapToGlobal(pos))
 
     def startDrag(self, supportedActions) -> None:  # noqa: ANN001
         item = self.currentItem()

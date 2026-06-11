@@ -34,7 +34,14 @@ from juce_theme_studio.core.alignment import (
     distribute_horizontally,
     distribute_vertically,
 )
-from juce_theme_studio.core.assets import import_asset, import_project_assets, resolve_asset_path
+from juce_theme_studio.core.assets import (
+    delete_asset,
+    get_asset_usages,
+    import_asset,
+    import_project_assets,
+    resolve_asset_path,
+    unimported_project_images,
+)
 from juce_theme_studio.core.controls import Control, create_control
 from juce_theme_studio.core.manifest import ThemeManifest
 from juce_theme_studio.core.mapping import sync_scan_mappings
@@ -227,7 +234,11 @@ class MainWindow(QMainWindow):
         row_assets.addWidget(self._btn("From Project", lambda: self._import_from_project()))
         al.addLayout(row_assets)
         al.addWidget(self._btn("Import Sprite Sheet", self._import_sprite_sheet))
-        al.addWidget(self._btn("Set Background", self._set_background))
+        row_asset_actions = QHBoxLayout()
+        row_asset_actions.addWidget(self._btn("Set Background", self._set_background))
+        row_asset_actions.addWidget(self._btn("Delete Asset", self._delete_selected_asset))
+        al.addLayout(row_asset_actions)
+        self._asset_list.delete_requested.connect(self._delete_selected_asset)
         left.addWidget(assets_box)
 
         palette_box = QWidget()
@@ -465,29 +476,37 @@ class MainWindow(QMainWindow):
     def _offer_import_project_assets(self) -> None:
         if not self._project or not self._project.scan_result:
             return
-        if self._project.manifest.assets:
-            return
-        images = self._project.scan_result.image_assets
+        images = unimported_project_images(
+            self._project.manifest,
+            self._project.root,
+            self._project.scan_result.image_assets,
+        )
         if not images:
             return
         answer = QMessageBox.question(
             self,
             "Import project assets",
-            f"Found {len(images)} image(s) in this JUCE project.\n\n"
+            f"Found {len(images)} new image(s) in this JUCE project.\n\n"
             "Copy them into the asset library now? (Original files are not modified.)",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
         if answer == QMessageBox.StandardButton.Yes:
-            self._import_from_project(silent=False)
+            self._import_from_project(silent=False, image_paths=images)
 
-    def _import_from_project(self, *, silent: bool = False) -> None:
+    def _import_from_project(
+        self,
+        *,
+        silent: bool = False,
+        image_paths: list[str] | None = None,
+    ) -> None:
         if not self._project or not self._project.scan_result:
             if not silent:
                 QMessageBox.information(self, "No project", "Open a project first.")
             return
-        images = self._project.scan_result.image_assets
-        if not images:
+        if image_paths is None:
+            image_paths = self._project.scan_result.image_assets
+        if not image_paths:
             if not silent:
                 QMessageBox.information(
                     self,
@@ -498,11 +517,12 @@ class MainWindow(QMainWindow):
         imported = import_project_assets(
             self._project.manifest,
             self._project.root,
-            images,
+            image_paths,
         )
         if imported:
             for entry in imported:
                 self._log_panel.append_log(f"Imported from project: {entry.name}")
+            save_project(self._project)
             self._refresh_ui()
             if not silent:
                 QMessageBox.information(
@@ -516,6 +536,56 @@ class MainWindow(QMainWindow):
                 "Already imported",
                 "All project images are already in the asset library.",
             )
+
+    def _delete_selected_asset(self) -> None:
+        if not self._project:
+            return
+        row = self._asset_list.currentRow()
+        if row < 0 or row >= len(self._project.manifest.assets):
+            QMessageBox.information(self, "Select asset", "Select an asset from the list first.")
+            return
+        asset = self._project.manifest.assets[row]
+        usages = get_asset_usages(self._project.manifest, asset.id)
+        clear_refs = False
+        if usages:
+            usage_lines = "\n".join(f"  • {u.screen_name}: {u.description}" for u in usages[:8])
+            if len(usages) > 8:
+                usage_lines += f"\n  … and {len(usages) - 8} more"
+            reply = QMessageBox.question(
+                self,
+                "Asset in use",
+                f"'{asset.name}' is used in {len(usages)} place(s):\n\n{usage_lines}\n\n"
+                "Remove the asset and clear these references?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            clear_refs = True
+        else:
+            reply = QMessageBox.question(
+                self,
+                "Delete asset",
+                f"Delete '{asset.name}' from the asset library?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        deleted = delete_asset(
+            self._project.manifest,
+            self._project.root,
+            asset.id,
+            clear_references=clear_refs,
+        )
+        if deleted is None:
+            return
+        save_project(self._project)
+        self._refresh_ui()
+        if self._current_screen_id:
+            self._scene.load_screen(self._current_screen())
+        self._log_panel.append_log(f"Deleted asset: {deleted.name}")
 
     def _import_sprite_sheet(self) -> None:
         if not self._project:
@@ -959,6 +1029,7 @@ class MainWindow(QMainWindow):
         count = sync_scan_mappings(self._project.manifest.screens, self._project.scan_result)
         self._refresh_ui()
         self._log_panel.append_log(f"Rescan complete. {count} new mapping(s) added.")
+        self._offer_import_project_assets()
 
     def _export(self) -> None:
         if not self._project:
