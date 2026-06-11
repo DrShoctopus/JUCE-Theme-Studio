@@ -166,7 +166,8 @@ class ThemeAssets
 public:
     static juce::Image getImage (const juce::String& assetId);
     static juce::Image getSpriteFrame (const juce::String& assetId, int frameIndex,
-                                       int frameW, int frameH, int sheetW);
+                                       int frameW, int frameH, int sheetW, int sheetH,
+                                       const juce::String& layout);
     static bool loadFromLayout (const juce::File& layoutJson);
 }};
 }}
@@ -188,14 +189,30 @@ juce::Image ThemeAssets::getImage (const juce::String& assetId)
 }}
 
 juce::Image ThemeAssets::getSpriteFrame (const juce::String& assetId, int frameIndex,
-                                         int frameW, int frameH, int sheetW)
+                                         int frameW, int frameH, int sheetW, int sheetH,
+                                         const juce::String& layout)
 {{
     auto sheet = getImage (assetId);
     if (! sheet.isValid())
         return {{}};
 
-    const int x = (frameIndex * frameW) % sheetW;
-    const int y = (frameIndex * frameW) / sheetW * frameH;
+    juce::ignoreUnused (sheetW, sheetH);
+    int x = 0;
+    int y = 0;
+    if (layout == "vertical_strip")
+    {{
+        y = frameIndex * frameH;
+    }}
+    else if (layout == "grid")
+    {{
+        const int cols = juce::jmax (1, sheetW / frameW);
+        x = (frameIndex % cols) * frameW;
+        y = (frameIndex / cols) * frameH;
+    }}
+    else
+    {{
+        x = frameIndex * frameW;
+    }}
     return sheet.getClippedImage ({{ x, y, frameW, frameH }});
 }}
 
@@ -296,6 +313,9 @@ def _gen_components_cpp(ns: str, manifest: ThemeManifest) -> str:
         safe = _safe_cpp(screen.juce_component or screen.name)
         lines.append(f"void {safe}Layout::apply (juce::Component& root)")
         lines.append("{")
+        lines.append(
+            "    // Controls must use setComponentID() matching cpp_variable for findChildWithID."
+        )
         for c in screen.controls:
             var = c.mapping.cpp_variable or c.name
             lines.append(

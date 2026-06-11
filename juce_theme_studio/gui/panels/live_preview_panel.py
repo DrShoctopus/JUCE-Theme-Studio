@@ -54,7 +54,7 @@ class LivePreviewPanel(QWidget):
     def _on_toggle(self, checked: bool) -> None:
         path = Path(self._binary.text()) if self._binary.text().strip() else None
         if path and path.is_file():
-            self._bridge._external_path = path
+            self._bridge.set_external_binary(path)
         self._bridge.set_enabled(checked)
         self.toggled.emit(checked)
 
@@ -62,6 +62,7 @@ class LivePreviewPanel(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "JUCE Preview Binary", "")
         if path:
             self._binary.setText(path)
+            self._bridge.set_external_binary(Path(path))
 
     def set_suggested_binary(self, path: Path | None) -> None:
         if path and path.is_file():

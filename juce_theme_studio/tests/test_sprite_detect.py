@@ -21,5 +21,14 @@ def test_pillow_detect_horizontal_strip(tmp_path: Path) -> None:
     assert result.method in ("pillow", "opencv")
 
 
+def test_pillow_detect_vertical_strip(tmp_path: Path) -> None:
+    img = Image.new("RGBA", (64, 256), (0, 0, 0, 0))
+    path = tmp_path / "vertical.png"
+    img.save(path)
+    result = detect_sprite_sheet(path)
+    assert result.layout == "vertical_strip"
+    assert result.frame_count == 4
+
+
 def test_opencv_availability_is_bool() -> None:
     assert isinstance(opencv_available(), bool)

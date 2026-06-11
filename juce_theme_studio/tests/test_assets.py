@@ -73,7 +73,8 @@ def test_unimported_project_images(fixture_project: Path) -> None:
     from juce_theme_studio.juce.scanner import scan_juce_project
 
     scan = scan_juce_project(fixture_project)
-    assert unimported_project_images(manifest, fixture_project, scan.image_assets) == scan.image_assets
+    unimported = unimported_project_images(manifest, fixture_project, scan.image_assets)
+    assert unimported == scan.image_assets
 
     import_asset(manifest, fixture_project, fixture_project / "Resources" / "background.png")
     remaining = unimported_project_images(manifest, fixture_project, scan.image_assets)

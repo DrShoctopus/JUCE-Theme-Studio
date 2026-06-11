@@ -12,6 +12,8 @@ _JUCE_TYPE_MAP: dict[str, ControlType] = {
     "juce::TextButton": ControlType.BUTTON,
     "juce::ToggleButton": ControlType.TOGGLE_BUTTON,
     "juce::ImageButton": ControlType.BUTTON,
+    "juce::DrawableButton": ControlType.BUTTON,
+    "juce::ComboBox": ControlType.BUTTON,
     "juce::Label": ControlType.LABEL,
     "CustomKnob": ControlType.KNOB,
 }

@@ -44,12 +44,12 @@ from juce_theme_studio.core.assets import (
 )
 from juce_theme_studio.core.controls import Control, create_control
 from juce_theme_studio.core.manifest import ThemeManifest
-from juce_theme_studio.core.mapping import sync_scan_mappings
 from juce_theme_studio.core.project import (
     LoadedProject,
     create_manual_screen,
     load_project,
     rescan_mappings,
+    rescan_project,
     save_project,
 )
 from juce_theme_studio.core.sprite_slicer import slice_sprite_sheet_to_library
@@ -196,9 +196,6 @@ class MainWindow(QMainWindow):
         project_menu.addAction("Rescan Project", self._rescan_project)
         project_menu.addAction("Theme Diff…", self._show_theme_diff)
 
-        tools_menu = self.menuBar().addMenu("Tools")
-        tools_menu.addAction("Theme Diff…", self._show_theme_diff)
-
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
@@ -276,6 +273,7 @@ class MainWindow(QMainWindow):
         right.addWidget(self._layers)
 
         self._export_panel = ExportPanel()
+        self._export_panel.settings_changed.connect(self._on_export_settings_changed)
         right.addWidget(self._export_panel)
 
         preview_box = QWidget()
@@ -411,6 +409,7 @@ class MainWindow(QMainWindow):
         self._refresh_git_status()
         report = validate_manifest(m, self._project.root)
         self._log_panel.set_validation(report)
+        self._log_panel.set_warnings([issue.message for issue in report.warnings])
 
     def _on_screen_selected(self, row: int) -> None:
         self._load_screen_at_row(row)
@@ -440,6 +439,7 @@ class MainWindow(QMainWindow):
                 self._screen_list.item(row).setText(f"{screen.name}{src}{tag}")
             self._scene.load_screen(screen)
             self._canvas.fit_canvas()
+            self._mark_live_dirty()
 
     def _new_screen(self) -> None:
         if not self._project:
@@ -466,7 +466,7 @@ class MainWindow(QMainWindow):
             self,
             "Import Asset",
             "",
-            "Images (*.png *.jpg *.jpeg *.webp *.svg);;Fonts (*.ttf *.otf);;All (*)",
+            "Images (*.png *.jpg *.jpeg *.webp);;Fonts (*.ttf *.otf);;All (*)",
         )
         for p in paths:
             entry = import_asset(self._project.manifest, self._project.root, Path(p))
@@ -644,15 +644,23 @@ class MainWindow(QMainWindow):
             screen.background_asset_id = asset.id
             self._scene.load_screen(screen)
             self._log_panel.append_log(f"Background set to {asset.name}")
+            self._mark_live_dirty()
 
     def _sprite_config_for_asset(self, asset) -> SpriteConfig | None:
         if self._project is None:
             return None
-        if asset.sprite_config:
-            return SpriteConfig.from_dict(asset.sprite_config)
-        path = resolve_asset_path(self._project.root, asset)
-        fw, fh, fc, cols = detect_sprite_grid(path)
-        return SpriteConfig(frame_width=fw, frame_height=fh, frame_count=fc, columns=cols)
+        try:
+            if asset.sprite_config:
+                return SpriteConfig.from_dict(asset.sprite_config)
+            path = resolve_asset_path(self._project.root, asset)
+            fw, fh, fc, cols = detect_sprite_grid(path)
+            return SpriteConfig(frame_width=fw, frame_height=fh, frame_count=fc, columns=cols)
+        except (ValueError, OSError) as exc:
+            logger.warning("Sprite config fallback for %s: %s", asset.name, exc)
+            return SpriteConfig()
+
+    def _on_export_settings_changed(self) -> None:
+        self._mark_live_dirty()
 
     def _add_control(self) -> None:
         if not self._project or not self._current_screen_id:
@@ -680,6 +688,8 @@ class MainWindow(QMainWindow):
 
     def _push_add_control(self, control: Control) -> None:
         screen = self._current_screen()
+        if screen:
+            control.z_index = max((c.z_index for c in screen.controls), default=-1) + 1
 
         def do():
             self._scene.add_control(control)
@@ -934,13 +944,15 @@ class MainWindow(QMainWindow):
             return
         screen = self._current_screen()
         new_controls: list[Control] = []
+        z = max((x.z_index for x in screen.controls), default=-1)
         for c in self._clipboard:
             nc = copy.deepcopy(c)
             nc.id = uuid.uuid4().hex[:12]
             nc.x += 20
             nc.y += 20
             nc.name = c.name + "_paste"
-            nc.z_index = max((x.z_index for x in screen.controls), default=-1) + 1
+            z += 1
+            nc.z_index = z
             new_controls.append(nc)
 
         def do():
@@ -953,6 +965,7 @@ class MainWindow(QMainWindow):
 
         self._undo.push(CallableCommand(do, undo))
         self._layers.set_screen(screen)
+        self._mark_live_dirty()
 
     def _select_all(self) -> None:
         for item in self._scene._items.values():
@@ -985,11 +998,13 @@ class MainWindow(QMainWindow):
 
         self._undo.push(CallableCommand(do, undo))
         self._layers.set_screen(screen)
+        self._mark_live_dirty()
 
     def _refresh_canvas(self) -> None:
         screen = self._current_screen()
         if screen:
             self._scene.load_screen(screen)
+        self._mark_live_dirty()
 
     def _undo_action(self) -> None:
         if self._undo.undo():
@@ -1011,6 +1026,7 @@ class MainWindow(QMainWindow):
             self._scene.snap_to_grid = self._project.manifest.snap_to_grid
             self._scene.grid_size = self._project.manifest.grid_size
             self._log_panel.append_log("Settings updated.")
+            self._mark_live_dirty()
 
     def _sync_mappings(self) -> None:
         if not self._project:
@@ -1023,12 +1039,12 @@ class MainWindow(QMainWindow):
     def _rescan_project(self) -> None:
         if not self._project:
             return
-        from juce_theme_studio.juce.scanner import scan_juce_project
-
-        self._project.scan_result = scan_juce_project(self._project.root)
-        count = sync_scan_mappings(self._project.manifest.screens, self._project.scan_result)
+        screens_added, mapped = rescan_project(self._project)
         self._refresh_ui()
-        self._log_panel.append_log(f"Rescan complete. {count} new mapping(s) added.")
+        msg = f"Rescan complete. {mapped} new mapping(s) added."
+        if screens_added:
+            msg += f" {screens_added} new screen(s) added."
+        self._log_panel.append_log(msg)
         self._offer_import_project_assets()
 
     def _export(self) -> None:

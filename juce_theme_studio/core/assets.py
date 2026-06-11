@@ -12,7 +12,7 @@ from PIL import Image
 from juce_theme_studio.core.manifest import AssetEntry, ThemeManifest
 from juce_theme_studio.core.types import STUDIO_DIR
 
-SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".bmp"}
+SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 SUPPORTED_FONT_EXTENSIONS = {".ttf", ".otf", ".woff", ".woff2"}
 
 
@@ -123,9 +123,9 @@ def delete_asset(
         return None
 
     path = resolve_asset_path(project_root, entry)
-    manifest.assets = [a for a in manifest.assets if a.id != asset_id]
     if path.is_file():
         path.unlink()
+    manifest.assets = [a for a in manifest.assets if a.id != asset_id]
 
     if clear_references:
         for screen in manifest.screens:

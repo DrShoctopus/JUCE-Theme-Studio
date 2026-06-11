@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,10 @@ except ImportError:
     pass
 else:
     git = git_module
+
+
+class GitCommandError(RuntimeError):
+    """Raised when a git CLI command fails."""
 
 
 @dataclass
@@ -95,12 +100,17 @@ def get_diff(project_root: Path, file_path: str) -> GitDiff:
 
 
 def create_backup_branch(project_root: Path, base_name: str = "theme-studio-backup") -> str:
-    branch_name = f"{base_name}"
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    branch_name = f"{base_name}-{ts}"
     if git is not None:
         repo = git.Repo(project_root, search_parent_directories=True)
+        if branch_name in {h.name for h in repo.heads}:
+            raise GitCommandError(f"Branch already exists: {branch_name}")
         repo.git.checkout("-b", branch_name)
         return branch_name
-    _git_cmd(project_root, "checkout", "-b", branch_name)
+    rc = _git_cmd_rc(project_root, "checkout", "-b", branch_name)
+    if rc != 0:
+        raise GitCommandError(f"Failed to create branch: {branch_name}")
     return branch_name
 
 
@@ -111,7 +121,9 @@ def stage_files(project_root: Path, files: list[str]) -> None:
         repo = git.Repo(project_root, search_parent_directories=True)
         repo.index.add(files)
         return
-    _git_cmd(project_root, "add", *files)
+    rc = _git_cmd_rc(project_root, "add", *files)
+    if rc != 0:
+        raise GitCommandError("git add failed")
 
 
 def commit(project_root: Path, message: str, files: list[str] | None = None) -> str:
@@ -122,8 +134,13 @@ def commit(project_root: Path, message: str, files: list[str] | None = None) -> 
         repo = git.Repo(project_root, search_parent_directories=True)
         commit_obj = repo.index.commit(message)
         return str(commit_obj.hexsha[:8])
-    _git_cmd(project_root, "commit", "-m", message)
-    return _git_cmd(project_root, "rev-parse", "--short", "HEAD") or ""
+    rc = _git_cmd_rc(project_root, "commit", "-m", message)
+    if rc != 0:
+        raise GitCommandError("git commit failed — nothing staged or commit rejected")
+    sha = _git_cmd(project_root, "rev-parse", "--short", "HEAD")
+    if not sha:
+        raise GitCommandError("git commit succeeded but rev-parse failed")
+    return sha
 
 
 def _git_cmd(project_root: Path, *args: str) -> str:
@@ -138,3 +155,17 @@ def _git_cmd(project_root: Path, *args: str) -> str:
         return (result.stdout or result.stderr).strip()
     except OSError:
         return ""
+
+
+def _git_cmd_rc(project_root: Path, *args: str) -> int:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode
+    except OSError:
+        return 1

@@ -16,9 +16,10 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QResizeEvent,
+    QShowEvent,
     QWheelEvent,
 )
-from PySide6.QtGui import QResizeEvent, QShowEvent
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene, QGraphicsView
 
 from juce_theme_studio.core.assets import resolve_asset_path
@@ -32,7 +33,6 @@ from juce_theme_studio.gui.widgets.asset_list import MIME_ASSET_ID, MIME_ASSET_S
 
 
 class CanvasScene(QGraphicsScene):
-    selection_changed = Signal(object)  # Control | None
     control_moved = Signal(str)
     control_clicked = Signal(str)  # control id
 
@@ -53,6 +53,7 @@ class CanvasScene(QGraphicsScene):
 
     def load_screen(self, screen: Screen) -> None:
         self.screen = screen
+        self._guides.reset()
         self.clear()
         self._items.clear()
         self._bg_item = None
@@ -178,21 +179,14 @@ class CanvasScene(QGraphicsScene):
     def set_preview_mode(self, enabled: bool) -> None:
         self.preview_mode = enabled
         for item in self._items.values():
-            item.preview_mode = enabled
-            item.setFlag(
-                item.GraphicsItemFlag.ItemIsMovable,
-                not item.control.locked and not enabled,
-            )
-            item.update()
+            item.update_from_control(enabled, self.button_preview_state)
 
     def set_button_preview_state(self, state: PreviewState) -> None:
         self.button_preview_state = state
         for item in self._items.values():
-            item.button_preview_state = state
-            item._refresh_pixmap()
-            item.update()
+            item.update_from_control(self.preview_mode, state)
 
-    def snap_position(self, pos: QPointF) -> QPointF:
+    def snap_point_to_grid(self, pos: QPointF) -> QPointF:
         if not self.snap_to_grid:
             return pos
         g = self.grid_size
@@ -254,6 +248,11 @@ class CanvasView(QGraphicsView):
         )
         self.setCursor(cursor)
         self.viewport().setCursor(cursor)
+        self.setDragMode(
+            QGraphicsView.DragMode.NoDrag
+            if active
+            else QGraphicsView.DragMode.RubberBandDrag
+        )
 
     def _apply_zoom(self, zoom: float) -> None:
         self._zoom = zoom
@@ -301,6 +300,16 @@ class CanvasView(QGraphicsView):
         self._apply_zoom(new_zoom)
         event.accept()
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self._pending_fit:
+            self._perform_fit()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if self._pending_fit:
+            self._perform_fit()
+
     def fit_canvas(self) -> None:
         if self.viewport().width() < 2 or self.viewport().height() < 2:
             self._pending_fit = True
@@ -317,3 +326,4 @@ class CanvasView(QGraphicsView):
             self.resetTransform()
             self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
             self._zoom = self.transform().m11()
+        self._pending_fit = False

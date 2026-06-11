@@ -48,7 +48,6 @@ class ControlGraphicsItem(QGraphicsObject):
         self._pixmap: QPixmap | None = None
         self._aspect_ratio = control.width / max(1, control.height)
         self._resizing = False
-        self._resize_handle: str | None = None
         self._drag_start: QPointF | None = None
         self._orig_geom: QRectF | None = None
 
@@ -200,7 +199,6 @@ class ControlGraphicsItem(QGraphicsObject):
                              self.HANDLE_SIZE, self.HANDLE_SIZE)
         if handle_rect.contains(pos):
             self._resizing = True
-            self._resize_handle = "se"
             self._drag_start = event.scenePos()
             self._orig_geom = QRectF(self.pos().x(), self.pos().y(), r.width(), r.height())
             event.accept()
@@ -226,7 +224,6 @@ class ControlGraphicsItem(QGraphicsObject):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
         self._resizing = False
-        self._resize_handle = None
         super().mouseReleaseEvent(event)
 
     def update_from_control(self, preview_mode: bool, button_state: PreviewState) -> None:

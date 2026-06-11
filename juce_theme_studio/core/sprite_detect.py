@@ -67,7 +67,12 @@ def _detect_pillow(image_path: Path) -> SpriteDetectionResult:
             cols = w // frame_size
             rows = h // frame_size
             fc = cols * rows
-            layout = "grid" if rows > 1 and cols > 1 else "horizontal_strip"
+            if rows > 1 and cols > 1:
+                layout = "grid"
+            elif rows > 1 and cols == 1:
+                layout = "vertical_strip"
+            else:
+                layout = "horizontal_strip"
             return SpriteDetectionResult(
                 frame_size, frame_size, fc, cols, rows, layout, "pillow",
             )
@@ -83,7 +88,9 @@ def _detect_opencv(image_path: Path) -> SpriteDetectionResult | None:
         return None
 
     h, w = img.shape[:2]
-    if img.shape[2] == 4:
+    if len(img.shape) == 2:
+        content = (img < 250).astype(np.uint8)
+    elif img.shape[2] == 4:
         alpha = img[:, :, 3]
         content = (alpha > 10).astype(np.uint8)
     else:

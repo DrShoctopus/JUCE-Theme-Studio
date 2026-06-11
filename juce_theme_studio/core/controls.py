@@ -91,7 +91,10 @@ class Control:
     def from_dict(cls, data: dict[str, Any]) -> Control:
         ctype = data.get("control_type", ControlType.STATIC_IMAGE.value)
         if isinstance(ctype, str):
-            ctype = ControlType(ctype)
+            try:
+                ctype = ControlType(ctype)
+            except ValueError:
+                ctype = ControlType.STATIC_IMAGE
         sprite_raw = data.get("sprite_config")
         return cls(
             id=str(data.get("id", uuid.uuid4().hex[:12])),
