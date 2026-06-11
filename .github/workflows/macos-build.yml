@@ -1,0 +1,101 @@
+name: macOS Build
+
+# Manual on-demand builds only — no automatic CI triggers.
+on:
+  workflow_dispatch:
+    inputs:
+      python_version:
+        description: Python version
+        required: false
+        default: "3.12"
+        type: choice
+        options:
+          - "3.11"
+          - "3.12"
+          - "3.13"
+      build_juce_preview:
+        description: Build JUCE Live Preview companion app
+        required: false
+        default: true
+        type: boolean
+      juce_ref:
+        description: JUCE git ref (branch or tag)
+        required: false
+        default: master
+        type: string
+
+jobs:
+  build:
+    name: Build on macOS
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+          cache-dependency-path: juce_theme_studio/pyproject.toml
+
+      - name: Install Python dependencies
+        working-directory: juce_theme_studio
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,full]"
+
+      - name: Run tests
+        working-directory: juce_theme_studio
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest
+
+      - name: Build Python distribution
+        working-directory: juce_theme_studio
+        run: |
+          pip install build
+          python -m build --wheel --sdist
+          ls -la dist/
+
+      - name: Clone JUCE
+        if: inputs.build_juce_preview
+        run: |
+          git clone --depth 1 --branch "${{ inputs.juce_ref }}" \
+            https://github.com/juce-framework/JUCE.git "${{ runner.temp }}/JUCE"
+
+      - name: Build JUCE Live Preview
+        if: inputs.build_juce_preview
+        working-directory: juce_theme_studio/examples/juce_live_preview
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DJUCE_DIR="${{ runner.temp }}/JUCE"
+          cmake --build build --config Release
+          find build -type d -name '*.app' -maxdepth 5 -print
+          find build -type f -perm +111 -maxdepth 6 -print
+
+      - name: Collect JUCE Live Preview artifacts
+        if: inputs.build_juce_preview
+        working-directory: juce_theme_studio/examples/juce_live_preview
+        run: |
+          mkdir -p "${{ runner.temp }}/juce-artifacts"
+          find build -type d -name '*.app' -maxdepth 5 -exec cp -R {} "${{ runner.temp }}/juce-artifacts/" \;
+          find build -type f -name 'JuceLivePreview' -maxdepth 6 -exec cp {} "${{ runner.temp }}/juce-artifacts/" \;
+          ls -laR "${{ runner.temp }}/juce-artifacts"
+
+      - name: Upload Python build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist-macos
+          path: juce_theme_studio/dist/*
+          if-no-files-found: error
+
+      - name: Upload JUCE Live Preview binary
+        if: inputs.build_juce_preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: juce-live-preview-macos
+          path: ${{ runner.temp }}/juce-artifacts/**
+          if-no-files-found: error
