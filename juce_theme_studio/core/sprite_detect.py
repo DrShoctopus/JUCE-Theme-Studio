@@ -38,14 +38,25 @@ class SpriteDetectionResult:
 
 def detect_sprite_sheet(image_path: Path) -> SpriteDetectionResult:
     """Auto-detect sprite frames; prefers OpenCV when installed."""
+    pillow_result = _detect_pillow(image_path)
     if opencv_available():
         try:
             result = _detect_opencv(image_path)
-            if result is not None:
+            if result is not None and _should_prefer_opencv(result, pillow_result):
                 return result
         except Exception as exc:
             logger.debug("OpenCV sprite detect failed: %s", exc)
-    return _detect_pillow(image_path)
+    return pillow_result
+
+
+def _should_prefer_opencv(
+    opencv: SpriteDetectionResult,
+    pillow: SpriteDetectionResult,
+) -> bool:
+    """Use OpenCV only when it finds real frame structure, not one full-image blob."""
+    if opencv.frame_count > 1:
+        return True
+    return pillow.frame_count <= 1
 
 
 def _detect_pillow(image_path: Path) -> SpriteDetectionResult:
@@ -116,6 +127,8 @@ def _detect_opencv(image_path: Path) -> SpriteDetectionResult | None:
     fw = widths[len(widths) // 2]
     fh = heights[len(heights) // 2]
     if fw < 4 or fh < 4:
+        return None
+    if fw >= w and fh >= h:
         return None
 
     cols = max(1, w // fw)

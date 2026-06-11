@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
-project(JuceLivePreview VERSION 1.0.0 LANGUAGES CXX)
+# JUCE builds SheenBidi as C; both languages must be enabled.
+project(JuceLivePreview VERSION 1.0.0 LANGUAGES C CXX)
 
 # Point JUCE_DIR to your JUCE install, e.g.:
 # cmake -B build -DJUCE_DIR=~/JUCE
@@ -14,7 +15,8 @@ add_subdirectory(${JUCE_DIR} JUCE)
 
 juce_add_gui_app(JuceLivePreview
     PRODUCT_NAME "JUCE Live Preview"
-    COMPANY_NAME "JUCE Theme Studio")
+    COMPANY_NAME "JUCEThemeStudio"
+    BUNDLE_ID com.jucethemestudio.JuceLivePreview)
 
 target_sources(JuceLivePreview PRIVATE Source/Main.cpp)
 target_compile_features(JuceLivePreview PRIVATE cxx_std_17)
