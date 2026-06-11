@@ -9,7 +9,7 @@ from typing import Any
 
 from PIL import Image
 
-from juce_theme_studio.core.types import SpriteLayout
+from juce_theme_studio.core.types import ButtonMode, MeterOrientation, SpriteLayout
 
 
 def _optional_int(value: Any) -> int | None:
@@ -47,9 +47,9 @@ class SpriteConfig:
     start_angle_deg: float = -135.0
     end_angle_deg: float = 135.0
     # Button
-    button_mode: str = "momentary"
+    button_mode: ButtonMode = ButtonMode.MOMENTARY
     # Meter
-    meter_orientation: str = "vertical"
+    meter_orientation: MeterOrientation = MeterOrientation.VERTICAL
     peak_hold: bool = False
     min_db: float = -60.0
     max_db: float = 6.0
@@ -79,8 +79,8 @@ class SpriteConfig:
             "reversed": self.reversed,
             "start_angle_deg": self.start_angle_deg,
             "end_angle_deg": self.end_angle_deg,
-            "button_mode": self.button_mode,
-            "meter_orientation": self.meter_orientation,
+            "button_mode": self.button_mode.value,
+            "meter_orientation": self.meter_orientation.value,
             "peak_hold": self.peak_hold,
             "min_db": self.min_db,
             "max_db": self.max_db,
@@ -95,7 +95,20 @@ class SpriteConfig:
     def from_dict(cls, data: dict[str, Any]) -> SpriteConfig:
         layout = data.get("layout", SpriteLayout.HORIZONTAL_STRIP.value)
         if isinstance(layout, str):
-            layout = SpriteLayout(layout)
+            try:
+                layout = SpriteLayout(layout)
+            except ValueError:
+                layout = SpriteLayout.HORIZONTAL_STRIP
+        button_mode_raw = str(data.get("button_mode", ButtonMode.MOMENTARY.value))
+        try:
+            button_mode = ButtonMode(button_mode_raw)
+        except ValueError:
+            button_mode = ButtonMode.MOMENTARY
+        meter_raw = str(data.get("meter_orientation", MeterOrientation.VERTICAL.value))
+        try:
+            meter_orientation = MeterOrientation(meter_raw)
+        except ValueError:
+            meter_orientation = MeterOrientation.VERTICAL
         return cls(
             layout=layout,
             frame_count=int(data.get("frame_count", 1)),
@@ -114,8 +127,8 @@ class SpriteConfig:
             reversed=bool(data.get("reversed", False)),
             start_angle_deg=float(data.get("start_angle_deg", -135.0)),
             end_angle_deg=float(data.get("end_angle_deg", 135.0)),
-            button_mode=str(data.get("button_mode", "momentary")),
-            meter_orientation=str(data.get("meter_orientation", "vertical")),
+            button_mode=button_mode,
+            meter_orientation=meter_orientation,
             peak_hold=bool(data.get("peak_hold", False)),
             min_db=float(data.get("min_db", -60.0)),
             max_db=float(data.get("max_db", 6.0)),
@@ -130,11 +143,11 @@ class SpriteConfig:
 def frame_index_for_value(config: SpriteConfig, normalized: float) -> int:
     """Map normalized value [0,1] to sprite frame index."""
     value = max(0.0, min(1.0, normalized))
-    if config.bipolar:
-        value = (value * 2.0) - 1.0
-        value = (value + 1.0) / 2.0
     if config.reversed:
         value = 1.0 - value
+    if config.bipolar:
+        # Bipolar knobs: 0.5 maps to center frame; extremes at 0 and 1.
+        value = abs(value - 0.5) * 2.0
     if config.frame_count <= 1:
         return config.default_frame
     idx = int(round(value * (config.frame_count - 1)))

@@ -6,8 +6,10 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QHBoxLayout,
     QPushButton,
+    QStyle,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -63,7 +65,12 @@ class LayersPanel(QWidget):
             if not control.visible:
                 item.setForeground(0, Qt.GlobalColor.gray)
             if control.locked:
-                item.setIcon(0, QIcon())
+                lock_icon = QIcon.fromTheme("object-locked")
+                if lock_icon.isNull():
+                    lock_icon = QApplication.style().standardIcon(
+                        QStyle.StandardPixmap.SP_DialogCancelButton,
+                    )
+                item.setIcon(0, lock_icon)
             self._tree.addTopLevelItem(item)
             self._items[control.id] = item
 

@@ -48,6 +48,7 @@ class ScreenPanel(QWidget):
         layout.addStretch()
 
         self._screen: Screen | None = None
+        self._previous_name = ""
         self._block = False
 
     def set_screen(self, screen: Screen | None) -> None:
@@ -58,6 +59,7 @@ class ScreenPanel(QWidget):
             self._block = False
             return
         self._placeholder.setVisible(False)
+        self._previous_name = screen.name
         self._name.setText(screen.name)
         self._component.setText(screen.juce_component or "(manual)")
         self._width.setValue(screen.canvas_width)
@@ -74,5 +76,11 @@ class ScreenPanel(QWidget):
     def _emit(self) -> None:
         if self._block or not self._screen:
             return
-        self._screen.name = self._name.text()
+        new_name = self._name.text()
+        if new_name != self._previous_name:
+            for ctrl in self._screen.controls:
+                if ctrl.mapping.screen_name == self._previous_name:
+                    ctrl.mapping.screen_name = new_name
+            self._previous_name = new_name
+        self._screen.name = new_name
         self.screen_changed.emit()

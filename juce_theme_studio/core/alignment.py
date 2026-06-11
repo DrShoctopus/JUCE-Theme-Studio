@@ -60,8 +60,6 @@ def align_controls(
     controls: list[Control],
     mode: AlignMode,
     *,
-    canvas_width: int | None = None,
-    canvas_height: int | None = None,
     reference: Rect | None = None,
 ) -> dict[str, tuple[int, int]]:
     """Return control id -> (new_x, new_y) after alignment."""

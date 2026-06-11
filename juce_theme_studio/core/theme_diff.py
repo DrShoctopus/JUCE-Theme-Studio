@@ -108,24 +108,40 @@ def _diff_current_vs_layout(manifest_path: Path, layout_path: Path) -> ThemeDiff
     with layout_path.open(encoding="utf-8") as f:
         layout = json.load(f)
     report = ThemeDiffReport(left_label="backup export", right_label="current manifest")
+    backup_screens = {s.get("name", ""): s for s in layout.get("screens", [])}
     cur_screens = {s.name: s for s in current.screens}
-    for screen in layout.get("screens", []):
-        name = screen.get("name", "")
+
+    for name in backup_screens:
         if name not in cur_screens:
             report.entries.append(
-                DiffEntry("screen", "removed", name, "Screen in backup not in current manifest")
+                DiffEntry("screen", "removed", name, "Screen removed since backup export")
+            )
+
+    for name, cur in cur_screens.items():
+        if name not in backup_screens:
+            report.entries.append(
+                DiffEntry("screen", "added", name, "Screen added since backup export")
             )
             continue
-        cur = cur_screens[name]
-        for ctrl in screen.get("controls", []):
-            cname = ctrl.get("name", "")
-            match = next((c for c in cur.controls if c.name == cname), None)
-            if not match:
+
+        backup_ctrls = {
+            c.get("name", ""): c for c in backup_screens[name].get("controls", [])
+        }
+        cur_ctrls = {c.name: c for c in cur.controls}
+
+        for cname, bctrl in backup_ctrls.items():
+            if cname not in cur_ctrls:
                 report.entries.append(
-                    DiffEntry("control", "added", f"{name}/{cname}", "New control in current")
+                    DiffEntry(
+                        "control",
+                        "removed",
+                        f"{name}/{cname}",
+                        "Control removed since backup export",
+                    )
                 )
                 continue
-            bounds = ctrl.get("bounds", {})
+            match = cur_ctrls[cname]
+            bounds = bctrl.get("bounds", {})
             if (
                 match.x != bounds.get("x")
                 or match.y != bounds.get("y")
@@ -137,11 +153,23 @@ def _diff_current_vs_layout(manifest_path: Path, layout_path: Path) -> ThemeDiff
                         "control",
                         "changed",
                         f"{name}/{cname}",
-                        "Bounds changed",
+                        "Bounds changed since backup export",
                         old_value=str(bounds),
                         new_value=f"{match.x},{match.y},{match.width},{match.height}",
                     )
                 )
+
+        for cname in cur_ctrls:
+            if cname not in backup_ctrls:
+                report.entries.append(
+                    DiffEntry(
+                        "control",
+                        "added",
+                        f"{name}/{cname}",
+                        "Control added since backup export",
+                    )
+                )
+
     return report
 
 

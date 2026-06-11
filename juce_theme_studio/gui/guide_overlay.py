@@ -13,6 +13,10 @@ class GuideOverlay:
     def __init__(self) -> None:
         self._lines: list[QGraphicsLineItem] = []
 
+    def reset(self) -> None:
+        """Drop references without removing items (e.g. before scene.clear())."""
+        self._lines.clear()
+
     def clear(self, scene) -> None:  # noqa: ANN001
         for line in self._lines:
             scene.removeItem(line)

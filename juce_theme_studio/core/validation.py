@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -62,7 +63,25 @@ def validate_manifest(manifest: ThemeManifest, project_root: Path) -> Validation
     if not manifest.screens:
         report.add("warning", "No screens defined in project.")
 
+    ns = manifest.export_settings.namespace
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", ns):
+        report.add("error", f"Invalid C++ export namespace: {ns!r}")
+
     for screen in manifest.screens:
+        if screen.background_asset_id:
+            bg_asset = manifest.get_asset(screen.background_asset_id)
+            if bg_asset is None:
+                report.add(
+                    "error",
+                    "Screen references unknown background asset.",
+                    screen.id,
+                )
+            elif not asset_exists(project_root, bg_asset):
+                report.add(
+                    "error",
+                    "Broken background asset path for screen.",
+                    screen.id,
+                )
         names_seen: dict[str, str] = {}
         for control in screen.controls:
             if not control.name.strip():

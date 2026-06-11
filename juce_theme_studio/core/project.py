@@ -75,6 +75,17 @@ def rescan_mappings(loaded: LoadedProject) -> int:
     return count
 
 
+def rescan_project(loaded: LoadedProject) -> tuple[int, int]:
+    """Rescan JUCE sources, merge new screens, and sync control mappings."""
+    before = len(loaded.manifest.screens)
+    loaded.scan_result = scan_juce_project(loaded.root)
+    _merge_scanned_screens(loaded.manifest, loaded.scan_result)
+    screens_added = len(loaded.manifest.screens) - before
+    mapped = sync_scan_mappings(loaded.manifest.screens, loaded.scan_result)
+    loaded.mappings_added = mapped
+    return screens_added, mapped
+
+
 def save_project(loaded: LoadedProject) -> None:
     """Persist manifest to disk."""
     loaded.manifest.save(loaded.manifest_path)

@@ -203,7 +203,13 @@ def _extract_controls(text: str) -> list[DetectedControl]:
             for m in re.finditer(pattern, line):
                 var = m.group(2) if juce_class == "CustomKnob" else m.group(1)
                 controls.append(DetectedControl(var, juce_class, line_no))
-    return controls
+    seen: set[str] = set()
+    deduped: list[DetectedControl] = []
+    for control in controls:
+        if control.cpp_variable not in seen:
+            seen.add(control.cpp_variable)
+            deduped.append(control)
+    return deduped
 
 
 def _guess_canvas_size(text: str) -> tuple[int, int]:

@@ -49,6 +49,14 @@ class LivePreviewBridge(QObject):
         self._manifest = manifest
         self._external_path = external_binary
 
+    def set_external_binary(self, path: Path | None) -> None:
+        """Update the JUCE preview binary path (e.g. after browse)."""
+        self._external_path = path.resolve() if path else None
+        if self._enabled and self._external_path and self._external_path.is_file():
+            layout = self.layout_export_path()
+            if layout and layout.is_file():
+                self._sync_external(layout)
+
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled
         if enabled:
@@ -105,7 +113,14 @@ class LivePreviewBridge(QObject):
     def _write_ipc(self, layout_path: Path) -> None:
         ipc = layout_path.parent / ".live_preview_ipc.json"
         ipc.write_text(
-            json.dumps({"layout": str(layout_path), "reload": True}) + "\n",
+            json.dumps(
+                {
+                    "layout": str(layout_path),
+                    "reload": True,
+                    "mime": MIME_LAYOUT,
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
 
