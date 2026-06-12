@@ -137,7 +137,18 @@ class ControlGraphicsItem(QGraphicsObject):
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         rect = self.rect()
         if self._pixmap and not self._pixmap.isNull():
-            painter.drawPixmap(rect.toRect(), self._pixmap)
+            # Fit the frame within the control bounds keeping its aspect ratio
+            # (centred), so non-square art isn't stretched or clipped at the edges.
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            pw, ph = self._pixmap.width(), self._pixmap.height()
+            scale = min(rect.width() / pw, rect.height() / ph) if pw and ph else 1.0
+            dw, dh = pw * scale, ph * scale
+            target = QRectF(
+                rect.x() + (rect.width() - dw) / 2,
+                rect.y() + (rect.height() - dh) / 2,
+                dw, dh,
+            )
+            painter.drawPixmap(target.toRect(), self._pixmap)
         else:
             color = QColor(80, 120, 180, 120)
             if self.control.control_type == ControlType.KNOB:
