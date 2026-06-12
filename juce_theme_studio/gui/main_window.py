@@ -66,7 +66,9 @@ from juce_theme_studio.core.undo import CallableCommand, UndoStack
 from juce_theme_studio.core.validation import validate_manifest
 from juce_theme_studio.git_tools.git import get_status
 from juce_theme_studio.gui.canvas import CanvasScene, CanvasView
+from juce_theme_studio.gui.dialogs.about_dialog import AboutDialog
 from juce_theme_studio.gui.dialogs.export_preview_dialog import ExportPreviewDialog
+from juce_theme_studio.gui.dialogs.help_dialog import HelpDialog
 from juce_theme_studio.gui.dialogs.link_asset_dialog import LinkAssetDialog
 from juce_theme_studio.gui.dialogs.settings_dialog import SettingsDialog
 from juce_theme_studio.gui.dialogs.sprite_import_dialog import SpriteImportDialog
@@ -227,6 +229,11 @@ class MainWindow(QMainWindow):
         project_menu.addSeparator()
         project_menu.addAction("Theme Colors…", self._show_theme_colors)
         project_menu.addAction("Theme Diff…", self._show_theme_diff)
+
+        help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction("User Guide…", self._show_help, QKeySequence("F1"))
+        help_menu.addSeparator()
+        help_menu.addAction("About JUCE Theme Studio…", self._show_about)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -1513,3 +1520,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "No project", "Open a project first.")
             return
         ThemeDiffDialog(self._project.root, self).exec()
+
+    def _show_help(self) -> None:
+        HelpDialog(self).exec()
+
+    def _show_about(self) -> None:
+        AboutDialog(self).exec()
