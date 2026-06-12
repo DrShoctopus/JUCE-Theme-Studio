@@ -7,12 +7,15 @@ import logging
 import uuid
 from pathlib import Path
 
+from PIL import Image
+from PIL.ImageQt import ImageQt
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -21,6 +24,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSlider,
     QSplitter,
     QToolBar,
     QVBoxLayout,
@@ -232,6 +236,12 @@ class MainWindow(QMainWindow):
         self._asset_list = AssetListWidget()
         self._asset_list.asset_clicked.connect(self._on_asset_clicked)
         al.addWidget(self._asset_list)
+        self._asset_preview = QLabel("Click an asset to preview")
+        self._asset_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._asset_preview.setMinimumHeight(140)
+        self._asset_preview.setFrameShape(QFrame.Shape.StyledPanel)
+        self._asset_preview.setStyleSheet("color: #888; background: #1b1b1b;")
+        al.addWidget(self._asset_preview)
         assign_hint = QLabel("Click asset → click control to assign")
         assign_hint.setWordWrap(True)
         assign_hint.setStyleSheet("color: #888; font-size: 11px;")
@@ -266,6 +276,14 @@ class MainWindow(QMainWindow):
         self._scene.geometry_committed.connect(self._on_geometry_committed)
         self._scene.control_clicked.connect(self._on_control_clicked)
         self._canvas.asset_dropped.connect(self._on_asset_dropped)
+        self._canvas.zoom_changed.connect(self._on_canvas_zoom_changed)
+
+        canvas_container = QWidget()
+        cc = QVBoxLayout(canvas_container)
+        cc.setContentsMargins(0, 0, 0, 0)
+        cc.setSpacing(0)
+        cc.addWidget(self._canvas)
+        cc.addWidget(self._build_zoom_bar())
 
         right = QSplitter(Qt.Orientation.Vertical)
         self._screen_panel = ScreenPanel()
@@ -305,7 +323,7 @@ class MainWindow(QMainWindow):
 
         h_split = QSplitter()
         h_split.addWidget(left)
-        h_split.addWidget(self._canvas)
+        h_split.addWidget(canvas_container)
         h_split.addWidget(right)
         h_split.setStretchFactor(1, 1)
 
@@ -321,6 +339,70 @@ class MainWindow(QMainWindow):
         b = QPushButton(text)
         b.clicked.connect(slot)
         return b
+
+    def _build_zoom_bar(self) -> QWidget:
+        bar = QWidget()
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(6, 2, 6, 2)
+        lay.addWidget(QLabel("Zoom"))
+        out_btn = self._btn("−", lambda: self._nudge_zoom(False))
+        in_btn = self._btn("+", lambda: self._nudge_zoom(True))
+        for b in (out_btn, in_btn):
+            b.setMaximumWidth(30)
+        self._zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self._zoom_slider.setRange(
+            int(CanvasView.ZOOM_MIN * 100), int(CanvasView.ZOOM_MAX * 100)
+        )
+        self._zoom_slider.setValue(100)
+        self._zoom_slider.setMaximumWidth(240)
+        self._zoom_slider.valueChanged.connect(self._on_zoom_slider)
+        self._zoom_block = False
+        self._zoom_label = QLabel("100%")
+        self._zoom_label.setMinimumWidth(46)
+        lay.addWidget(out_btn)
+        lay.addWidget(self._zoom_slider)
+        lay.addWidget(in_btn)
+        lay.addWidget(self._zoom_label)
+        lay.addStretch(1)
+        lay.addWidget(self._btn("Fit", self._fit_canvas))
+        return bar
+
+    def _on_zoom_slider(self, value: int) -> None:
+        if self._zoom_block:
+            return
+        self._canvas.set_zoom(value / 100.0)
+
+    def _nudge_zoom(self, zoom_in: bool) -> None:
+        factor = CanvasView.ZOOM_STEP if zoom_in else 1 / CanvasView.ZOOM_STEP
+        self._canvas.set_zoom(self._canvas.current_zoom() * factor)
+
+    def _on_canvas_zoom_changed(self, zoom: float) -> None:
+        percent = int(round(zoom * 100))
+        self._zoom_block = True
+        self._zoom_slider.setValue(max(self._zoom_slider.minimum(),
+                                       min(self._zoom_slider.maximum(), percent)))
+        self._zoom_block = False
+        self._zoom_label.setText(f"{percent}%")
+
+    def _show_asset_preview(self, asset) -> None:  # noqa: ANN001
+        self._asset_preview.setPixmap(QPixmap())
+        if asset is None or self._project is None:
+            self._asset_preview.setText("Click an asset to preview")
+            return
+        path = resolve_asset_path(self._project.root, asset)
+        if not path.is_file():
+            self._asset_preview.setText("(file missing)")
+            return
+        try:
+            with Image.open(path) as im:
+                pix = QPixmap.fromImage(ImageQt(im.convert("RGBA")))
+            w = max(120, self._asset_preview.width() - 8)
+            self._asset_preview.setPixmap(
+                pix.scaled(w, 200, Qt.AspectRatioMode.KeepAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
+            )
+        except Exception:
+            self._asset_preview.setText("(preview unavailable)")
 
     def keyPressEvent(self, event) -> None:  # noqa: ANN001
         key = event.key()
@@ -866,6 +948,7 @@ class MainWindow(QMainWindow):
         asset = self._project.manifest.get_asset(asset_id)
         if asset is None:
             return
+        self._show_asset_preview(asset)
         target = self._scene.get_selected_control()
         if target is not None:
             self._offer_link_asset_to_control(

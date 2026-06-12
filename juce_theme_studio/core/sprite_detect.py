@@ -59,23 +59,62 @@ def _should_prefer_opencv(
     return pillow.frame_count <= 1
 
 
+def _grid_result(fw: int, fh: int, cols: int, rows: int) -> SpriteDetectionResult:
+    if rows > 1 and cols > 1:
+        layout = "grid"
+    elif rows > 1 and cols == 1:
+        layout = "vertical_strip"
+    else:
+        layout = "horizontal_strip"
+    return SpriteDetectionResult(fw, fh, cols * rows, cols, rows, layout, "pillow")
+
+
+def _divisors_desc(n: int) -> list[int]:
+    return sorted((d for d in range(1, n + 1) if n % d == 0), reverse=True)
+
+
+def _square_grid(w: int, h: int) -> tuple[int, int, int] | None:
+    """Largest square frame size dividing both dimensions into 2..256 frames.
+
+    Handles gap-packed atlases (e.g. 1448x1086 -> 362px 4x3 grid) that have no
+    transparent separators for the projection-based detectors to find.
+    """
+    from math import gcd
+
+    for s in _divisors_desc(gcd(w, h)):
+        if s < 16 or s > min(w, h):
+            continue
+        cols, rows = w // s, h // s
+        if 2 <= cols * rows <= 256:
+            return s, cols, rows
+    return None
+
+
 def _detect_pillow(image_path: Path) -> SpriteDetectionResult:
     with Image.open(image_path) as img:
         w, h = img.size
-    for frame_size in (128, 64, 48, 32, 24, 16):
+
+    # 1. Common power-of-two-ish frame sizes (fast path for typical strips/grids).
+    for frame_size in (256, 128, 64, 48, 32, 24, 16):
         if w % frame_size == 0 and h % frame_size == 0:
-            cols = w // frame_size
-            rows = h // frame_size
-            fc = cols * rows
-            if rows > 1 and cols > 1:
-                layout = "grid"
-            elif rows > 1 and cols == 1:
-                layout = "vertical_strip"
-            else:
-                layout = "horizontal_strip"
-            return SpriteDetectionResult(
-                frame_size, frame_size, fc, cols, rows, layout, "pillow",
-            )
+            cols, rows = w // frame_size, h // frame_size
+            if cols * rows > 1:
+                return _grid_result(frame_size, frame_size, cols, rows)
+
+    # 2. Square-frame grid via gcd, for gap-packed sheets with odd frame sizes.
+    #    Skipped for square sheets to avoid splitting a single square image.
+    if w != h:
+        grid = _square_grid(w, h)
+        if grid is not None:
+            s, cols, rows = grid
+            return _grid_result(s, s, cols, rows)
+
+    # 3. Filmstrip of square frames (one dimension a multiple of the other).
+    if w > h and w % h == 0:
+        return _grid_result(h, h, w // h, 1)
+    if h > w and h % w == 0:
+        return _grid_result(w, w, 1, h // w)
+
     return SpriteDetectionResult(w, h, 1, 1, 1, "horizontal_strip", "pillow")
 
 

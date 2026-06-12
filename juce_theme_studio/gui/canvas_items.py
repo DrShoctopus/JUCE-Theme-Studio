@@ -48,12 +48,14 @@ class ControlGraphicsItem(QGraphicsObject):
         self._pixmap: QPixmap | None = None
         self._aspect_ratio = control.width / max(1, control.height)
         self._resizing = False
+        self._resize_mode = ""  # "e" | "s" | "se"
         self._drag_start: QPointF | None = None
         self._orig_geom: QRectF | None = None
 
         self.setPos(control.x, control.y)
         self.setZValue(control.z_index)
         self.setVisible(control.visible)
+        self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         if not control.locked and not preview_mode:
@@ -158,14 +160,26 @@ class ControlGraphicsItem(QGraphicsObject):
         if self.isSelected() and not self.preview_mode and not self.control.locked:
             self._draw_handles(painter)
 
-    def _draw_handles(self, painter: QPainter) -> None:
+    def _handles(self) -> dict[str, QRectF]:
+        """Resize handles: east (width), south (height), south-east (both)."""
         hs = self.HANDLE_SIZE
         r = self.rect()
-        handles = [
-            QRectF(r.right() - hs, r.bottom() - hs, hs, hs),
-        ]
+        return {
+            "e": QRectF(r.right() - hs, r.center().y() - hs / 2, hs, hs),
+            "s": QRectF(r.center().x() - hs / 2, r.bottom() - hs, hs, hs),
+            "se": QRectF(r.right() - hs, r.bottom() - hs, hs, hs),
+        }
+
+    def _handle_at(self, pos: QPointF) -> str:
+        handles = self._handles()
+        for mode in ("se", "e", "s"):  # corner wins over edges
+            if handles[mode].contains(pos):
+                return mode
+        return ""
+
+    def _draw_handles(self, painter: QPainter) -> None:
         painter.setBrush(QBrush(QColor(100, 150, 255)))
-        for h in handles:
+        for h in self._handles().values():
             painter.drawRect(h)
 
     def itemChange(self, change, value):  # noqa: ANN001
@@ -195,10 +209,10 @@ class ControlGraphicsItem(QGraphicsObject):
             return
         pos = event.pos()
         r = self.rect()
-        handle_rect = QRectF(r.right() - self.HANDLE_SIZE, r.bottom() - self.HANDLE_SIZE,
-                             self.HANDLE_SIZE, self.HANDLE_SIZE)
-        if handle_rect.contains(pos):
+        mode = self._handle_at(pos)
+        if mode:
             self._resizing = True
+            self._resize_mode = mode
             self._drag_start = event.scenePos()
             self._orig_geom = QRectF(self.pos().x(), self.pos().y(), r.width(), r.height())
             event.accept()
@@ -210,10 +224,16 @@ class ControlGraphicsItem(QGraphicsObject):
     def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
         if self._resizing and self._drag_start and self._orig_geom:
             delta = event.scenePos() - self._drag_start
-            new_w = max(16, int(self._orig_geom.width() + delta.x()))
-            new_h = max(16, int(self._orig_geom.height() + delta.y()))
-            if self.control.aspect_locked:
-                new_h = int(new_w / self._aspect_ratio)
+            ow, oh = self._orig_geom.width(), self._orig_geom.height()
+            new_w, new_h = int(ow), int(oh)
+            # Edge handles resize a single axis; the corner does both.
+            if self._resize_mode in ("e", "se"):
+                new_w = max(8, int(ow + delta.x()))
+            if self._resize_mode in ("s", "se"):
+                new_h = max(8, int(oh + delta.y()))
+            # Aspect lock only couples the free corner drag, never the edges.
+            if self._resize_mode == "se" and self.control.aspect_locked:
+                new_h = max(8, int(new_w / self._aspect_ratio))
             self.setRect(0, 0, new_w, new_h)
             self.control.width = new_w
             self.control.height = new_h
@@ -224,7 +244,21 @@ class ControlGraphicsItem(QGraphicsObject):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
         self._resizing = False
+        self._resize_mode = ""
         super().mouseReleaseEvent(event)
+
+    def hoverMoveEvent(self, event) -> None:  # noqa: ANN001
+        if self.preview_mode or self.control.locked or not self.isSelected():
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            super().hoverMoveEvent(event)
+            return
+        cursors = {
+            "e": Qt.CursorShape.SizeHorCursor,
+            "s": Qt.CursorShape.SizeVerCursor,
+            "se": Qt.CursorShape.SizeFDiagCursor,
+        }
+        self.setCursor(cursors.get(self._handle_at(event.pos()), Qt.CursorShape.ArrowCursor))
+        super().hoverMoveEvent(event)
 
     def update_from_control(self, preview_mode: bool, button_state: PreviewState) -> None:
         self.preview_mode = preview_mode

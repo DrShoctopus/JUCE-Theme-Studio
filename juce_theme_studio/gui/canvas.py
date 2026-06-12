@@ -256,6 +256,7 @@ class CanvasScene(QGraphicsScene):
 class CanvasView(QGraphicsView):
     # asset_id, x, y, is_sprite, target_control_id (empty = new control)
     asset_dropped = Signal(str, int, int, bool, str)
+    zoom_changed = Signal(float)  # current zoom factor (1.0 == 100%)
 
     ZOOM_MIN = 0.1
     ZOOM_MAX = 5.0
@@ -284,10 +285,21 @@ class CanvasView(QGraphicsView):
             else QGraphicsView.DragMode.RubberBandDrag
         )
 
+    def current_zoom(self) -> float:
+        return self._zoom
+
+    def set_zoom(self, zoom: float) -> None:
+        """Set absolute zoom (clamped). Used by the zoom bar."""
+        z = max(self.ZOOM_MIN, min(self.ZOOM_MAX, zoom))
+        if abs(z - self._zoom) < 1e-6:
+            return
+        self._apply_zoom(z)
+
     def _apply_zoom(self, zoom: float) -> None:
         self._zoom = zoom
         self.resetTransform()
         self.scale(self._zoom, self._zoom)
+        self.zoom_changed.emit(self._zoom)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasFormat(MIME_ASSET_ID):
@@ -356,4 +368,5 @@ class CanvasView(QGraphicsView):
             self.resetTransform()
             self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
             self._zoom = self.transform().m11()
+            self.zoom_changed.emit(self._zoom)
         self._pending_fit = False

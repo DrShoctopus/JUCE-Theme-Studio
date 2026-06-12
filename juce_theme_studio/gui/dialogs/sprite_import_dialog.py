@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PIL import Image
+from PIL.ImageQt import ImageQt
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -19,11 +23,14 @@ from juce_theme_studio.core.sprite_detect import detect_sprite_sheet, opencv_ava
 from juce_theme_studio.core.sprites import SpriteConfig
 from juce_theme_studio.core.types import SpriteLayout
 
+_PREVIEW_MAX = 320
+
 
 class SpriteImportDialog(QDialog):
     def __init__(self, image_path: Path, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Sprite Sheet Configuration")
+        self._image_path = image_path
         detected = detect_sprite_sheet(image_path)
         fw = detected.frame_width
         fh = detected.frame_height
@@ -36,6 +43,26 @@ class SpriteImportDialog(QDialog):
         if not opencv_available():
             hint += " (pip install opencv-python-headless for vision extras)"
         layout.addWidget(QLabel(hint))
+
+        # Scaled base pixmap for the live grid preview.
+        self._base_pixmap: QPixmap | None = None
+        self._sheet_size = (0, 0)
+        try:
+            with Image.open(image_path) as im:
+                rgba = im.convert("RGBA")
+                self._sheet_size = rgba.size
+                self._base_pixmap = QPixmap.fromImage(ImageQt(rgba)).scaled(
+                    _PREVIEW_MAX, _PREVIEW_MAX,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+        except Exception:
+            self._base_pixmap = None
+        self._preview = QLabel()
+        self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._preview.setMinimumHeight(120)
+        layout.addWidget(self._preview)
+
         form = QFormLayout()
 
         self._layout = QComboBox()
@@ -64,6 +91,9 @@ class SpriteImportDialog(QDialog):
         self._columns.setRange(1, 64)
         self._columns.setValue(cols)
 
+        for spin in (self._frame_w, self._frame_h, self._frame_count, self._columns):
+            spin.valueChanged.connect(self._update_preview)
+
         form.addRow("Frame width", self._frame_w)
         form.addRow("Frame height", self._frame_h)
         form.addRow("Frame count", self._frame_count)
@@ -88,6 +118,36 @@ class SpriteImportDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+        self._update_preview()
+
+    def _update_preview(self) -> None:
+        """Overlay the current frame grid on the scaled sheet so the user can
+        confirm the slice before importing."""
+        if self._base_pixmap is None or self._base_pixmap.isNull():
+            self._preview.setText("(no preview)")
+            return
+        sheet_w, sheet_h = self._sheet_size
+        if sheet_w <= 0 or sheet_h <= 0:
+            return
+        pix = QPixmap(self._base_pixmap)
+        scale = pix.width() / sheet_w
+        fw = max(1, self._frame_w.value())
+        fh = max(1, self._frame_h.value())
+        painter = QPainter(pix)
+        painter.setPen(QPen(QColor(255, 80, 80, 200), 1))
+        x = fw
+        while x < sheet_w:
+            px = round(x * scale)
+            painter.drawLine(px, 0, px, pix.height())
+            x += fw
+        y = fh
+        while y < sheet_h:
+            py = round(y * scale)
+            painter.drawLine(0, py, pix.width(), py)
+            y += fh
+        painter.end()
+        self._preview.setPixmap(pix)
 
     def slice_into_library(self) -> bool:
         return self._slice_frames.isChecked()
