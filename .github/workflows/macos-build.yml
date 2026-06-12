@@ -14,12 +14,12 @@ on:
           - "3.12"
           - "3.13"
       build_macos_app:
-        description: Build JUCE Theme Studio.app (double-clickable Mac app)
+        description: Build JUCE Theme Studio .app and DMG
         required: false
         default: true
         type: boolean
       build_juce_preview:
-        description: Build JUCE Live Preview companion app
+        description: Build JUCE Live Preview .app and DMG
         required: false
         default: true
         type: boolean
@@ -57,28 +57,40 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: python -m pytest -p pytest
 
-      - name: Build JUCE Theme Studio.app
+      # ── JUCE Theme Studio ──────────────────────────────────────────────────
+
+      - name: Build JUCE Theme Studio .app and DMG
         if: inputs.build_macos_app
         working-directory: juce_theme_studio
         run: bash packaging/build_macos_app.sh
+        # Produces: dist/JUCE Theme Studio.app
+        #           dist/JUCE_Theme_Studio_<version>.dmg
 
-      - name: Package JUCE Theme Studio.app
+      - name: Upload JUCE Theme Studio DMG
         if: inputs.build_macos_app
-        working-directory: juce_theme_studio
-        run: |
-          mkdir -p "${{ runner.temp }}/release"
-          cp packaging/README-MACOS.txt "${{ runner.temp }}/release/"
-          ditto -c -k --sequesterRsrc --keepParent \
-            "dist/JUCE Theme Studio.app" \
-            "${{ runner.temp }}/release/JUCE-Theme-Studio-macOS.zip"
-          ls -la "${{ runner.temp }}/release/"
+        uses: actions/upload-artifact@v4
+        with:
+          name: JUCE-Theme-Studio-macOS
+          path: juce_theme_studio/dist/JUCE_Theme_Studio_*.dmg
+          if-no-files-found: error
 
-      - name: Build Python wheel (developers)
+      # ── Python wheel (for developers) ─────────────────────────────────────
+
+      - name: Build Python wheel
         working-directory: juce_theme_studio
         run: |
           pip install build
           python -m build --wheel
           ls -la dist/
+
+      - name: Upload Python wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-macos
+          path: juce_theme_studio/dist/*.whl
+          if-no-files-found: error
+
+      # ── JUCE Live Preview ──────────────────────────────────────────────────
 
       - name: Clone JUCE
         if: inputs.build_juce_preview
@@ -95,44 +107,39 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DJUCE_DIR="${{ runner.temp }}/JUCE"
           cmake --build build --config Release
-          find build -type d -name '*.app' -maxdepth 5 -print
+          find build -maxdepth 5 -type d -name '*.app' -print
 
-      - name: Package JUCE Live Preview.app
+      - name: Package JUCE Live Preview DMG
         if: inputs.build_juce_preview
         working-directory: juce_theme_studio/examples/juce_live_preview
         run: |
-          mkdir -p "${{ runner.temp }}/release"
-          APP_PATH="$(find build -type d -name '*.app' -maxdepth 5 | head -1)"
+          APP_PATH="$(find build -maxdepth 5 -type d -name '*.app' | head -1)"
           if [[ -z "$APP_PATH" ]]; then
-            echo "No .app bundle found under build/" >&2
+            echo "ERROR: no .app bundle found under build/" >&2
             find build -maxdepth 6 -print >&2
             exit 1
           fi
-          echo "Packaging $APP_PATH"
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$APP_PATH" \
-            "${{ runner.temp }}/release/JUCE-Live-Preview-macOS.zip"
-          ls -la "${{ runner.temp }}/release/"
+          echo "Packaging: $APP_PATH"
 
-      - name: Upload JUCE Theme Studio.app
-        if: inputs.build_macos_app
-        uses: actions/upload-artifact@v4
-        with:
-          name: JUCE-Theme-Studio-macOS
-          path: ${{ runner.temp }}/release/JUCE-Theme-Studio-macOS.zip
-          if-no-files-found: error
+          STAGING="$(mktemp -d)"
+          cp -r "$APP_PATH" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
 
-      - name: Upload JUCE Live Preview.app
+          hdiutil create \
+            -srcfolder "$STAGING" \
+            -volname "JUCE Live Preview 1.0.0" \
+            -fs HFS+ \
+            -format UDZO \
+            -ov \
+            "${{ runner.temp }}/JuceLivePreview_1.0.0.dmg"
+
+          rm -rf "$STAGING"
+          ls -la "${{ runner.temp }}/"
+
+      - name: Upload JUCE Live Preview DMG
         if: inputs.build_juce_preview
         uses: actions/upload-artifact@v4
         with:
           name: JUCE-Live-Preview-macOS
-          path: ${{ runner.temp }}/release/JUCE-Live-Preview-macOS.zip
-          if-no-files-found: error
-
-      - name: Upload Python wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-wheel-macos
-          path: juce_theme_studio/dist/*.whl
+          path: ${{ runner.temp }}/JuceLivePreview_1.0.0.dmg
           if-no-files-found: error
