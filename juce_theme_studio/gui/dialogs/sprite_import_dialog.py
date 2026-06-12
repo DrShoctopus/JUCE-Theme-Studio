@@ -101,16 +101,24 @@ class SpriteImportDialog(QDialog):
 
         layout.addLayout(form)
 
-        self._slice_frames = QCheckBox("Slice all frames into asset library")
-        self._slice_frames.setChecked(True)
+        # The single sheet asset is what animates: assign it to a knob/button and
+        # the frame follows the control's value/state. Slicing is the opt-in path
+        # for using individual frames as separate static images (LEDs, decals).
+        self._keep_sheet = QCheckBox("Keep sprite sheet as one animated asset")
+        self._keep_sheet.setChecked(True)
+        self._keep_sheet.setToolTip(
+            "Imports the sheet as a single asset whose frames drive a knob/button "
+            "animation when assigned to a control."
+        )
+        layout.addWidget(self._keep_sheet)
+
+        self._slice_frames = QCheckBox("Also slice each frame into separate static assets")
+        self._slice_frames.setChecked(False)
         self._slice_frames.setToolTip(
-            "Each frame is saved as a separate image in the asset library."
+            "Adds every frame to the library as its own image. Use for single-state "
+            "art (LEDs, decals), not for animated knobs/meters."
         )
         layout.addWidget(self._slice_frames)
-
-        self._keep_sheet = QCheckBox("Also keep full sprite sheet in library")
-        self._keep_sheet.setChecked(True)
-        layout.addWidget(self._keep_sheet)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
