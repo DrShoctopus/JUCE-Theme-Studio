@@ -91,7 +91,17 @@ class SpriteImportDialog(QDialog):
         self._columns.setRange(1, 64)
         self._columns.setValue(cols)
 
-        for spin in (self._frame_w, self._frame_h, self._frame_count, self._columns):
+        # Frame size follows the grid: changing the layout / frame count /
+        # columns recomputes frame width & height to divide the sheet evenly.
+        # This is the only reliable way to fix a full-bleed sheet (no
+        # transparent gaps) that auto-detect mis-slices - the user just sets
+        # how many frames there are and the size snaps to match, instead of
+        # hand-editing width and count to stay consistent.
+        self._grid_block = False
+        self._frame_count.valueChanged.connect(self._sync_frame_size)
+        self._columns.valueChanged.connect(self._sync_frame_size)
+        self._layout.currentIndexChanged.connect(self._sync_frame_size)
+        for spin in (self._frame_w, self._frame_h):
             spin.valueChanged.connect(self._update_preview)
 
         form.addRow("Frame width", self._frame_w)
@@ -137,6 +147,30 @@ class SpriteImportDialog(QDialog):
 
         self._update_preview()
 
+    def _sync_frame_size(self) -> None:
+        """Recompute frame width/height so the grid divides the sheet evenly."""
+        if self._grid_block:
+            return
+        sheet_w, sheet_h = self._sheet_size
+        if sheet_w <= 0 or sheet_h <= 0:
+            return
+        count = max(1, self._frame_count.value())
+        layout = self._layout.currentData()
+        if layout == SpriteLayout.VERTICAL_STRIP:
+            cols, rows = 1, count
+        elif layout == SpriteLayout.HORIZONTAL_STRIP:
+            cols, rows = count, 1
+        else:  # grid: keep the user's column count, derive rows
+            cols = max(1, min(count, self._columns.value()))
+            rows = -(-count // cols)  # ceil
+
+        self._grid_block = True
+        self._columns.setValue(cols)
+        self._frame_w.setValue(max(1, round(sheet_w / cols)))
+        self._frame_h.setValue(max(1, round(sheet_h / rows)))
+        self._grid_block = False
+        self._update_preview()
+
     def _update_preview(self) -> None:
         """Overlay the current frame grid on the scaled sheet so the user can
         confirm the slice before importing."""
@@ -175,7 +209,8 @@ class SpriteImportDialog(QDialog):
         return self._remove_bg.isChecked()
 
     def sprite_config(self) -> SpriteConfig:
-        layout = self._layout.currentData()
+        # QComboBox data round-trips str-subclass enums as plain str on PySide6.
+        layout = SpriteLayout(self._layout.currentData())
         return SpriteConfig(
             layout=layout,
             frame_width=self._frame_w.value(),
