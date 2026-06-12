@@ -334,12 +334,27 @@ class CanvasView(QGraphicsView):
         event.acceptProposedAction()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        factor = self.ZOOM_STEP if event.angleDelta().y() > 0 else 1 / self.ZOOM_STEP
-        new_zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom * factor))
-        if abs(new_zoom - self._zoom) < 1e-6:
+        # Plain wheel / two-finger touchpad scroll pans the canvas; zooming is
+        # done with the zoom bar (or Ctrl/Cmd+wheel as a shortcut).
+        zoom_mod = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier
+        if event.modifiers() & zoom_mod:
+            factor = self.ZOOM_STEP if event.angleDelta().y() > 0 else 1 / self.ZOOM_STEP
+            new_zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom * factor))
+            if abs(new_zoom - self._zoom) >= 1e-6:
+                self._apply_zoom(new_zoom)
             event.accept()
             return
-        self._apply_zoom(new_zoom)
+
+        pixel = event.pixelDelta()
+        if not pixel.isNull():
+            dx, dy = pixel.x(), pixel.y()
+        else:
+            angle = event.angleDelta()
+            dx, dy = angle.x(), angle.y()
+        hbar = self.horizontalScrollBar()
+        vbar = self.verticalScrollBar()
+        hbar.setValue(hbar.value() - dx)
+        vbar.setValue(vbar.value() - dy)
         event.accept()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
