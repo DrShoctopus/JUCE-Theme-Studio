@@ -12,6 +12,7 @@ MIME_ASSET_SPRITE = "application/x-juce-asset-sprite"
 
 class AssetListWidget(QListWidget):
     delete_requested = Signal()
+    make_transparent_requested = Signal()
     asset_clicked = Signal(str, bool)  # asset_id, is_sprite
 
     def __init__(self) -> None:
@@ -37,11 +38,16 @@ class AssetListWidget(QListWidget):
         super().keyPressEvent(event)
 
     def _show_context_menu(self, pos) -> None:  # noqa: ANN001
-        if self.itemAt(pos) is None:
+        item = self.itemAt(pos)
+        if item is None:
             return
+        self.setCurrentItem(item)
         from PySide6.QtWidgets import QMenu
 
         menu = QMenu(self)
+        transparent_act = menu.addAction("Make Background Transparent")
+        transparent_act.triggered.connect(self.make_transparent_requested.emit)
+        menu.addSeparator()
         delete_act = menu.addAction("Delete Asset")
         delete_act.triggered.connect(self.delete_requested.emit)
         menu.exec(self.mapToGlobal(pos))

@@ -120,6 +120,14 @@ class SpriteImportDialog(QDialog):
         )
         layout.addWidget(self._slice_frames)
 
+        self._remove_bg = QCheckBox("Make near-white background transparent")
+        self._remove_bg.setChecked(False)
+        self._remove_bg.setToolTip(
+            "Knock out a solid border background so frames sit cleanly on the UI "
+            "instead of showing a white box."
+        )
+        layout.addWidget(self._remove_bg)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -162,6 +170,9 @@ class SpriteImportDialog(QDialog):
 
     def keep_full_sheet(self) -> bool:
         return self._keep_sheet.isChecked()
+
+    def remove_background(self) -> bool:
+        return self._remove_bg.isChecked()
 
     def sprite_config(self) -> SpriteConfig:
         layout = self._layout.currentData()

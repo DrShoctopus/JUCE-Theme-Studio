@@ -47,6 +47,7 @@ from juce_theme_studio.core.assets import (
     unimported_project_images,
 )
 from juce_theme_studio.core.controls import Control, create_control
+from juce_theme_studio.core.image_ops import make_background_transparent
 from juce_theme_studio.core.manifest import ThemeManifest
 from juce_theme_studio.core.project import (
     LoadedProject,
@@ -256,6 +257,7 @@ class MainWindow(QMainWindow):
         row_asset_actions.addWidget(self._btn("Delete Asset", self._delete_selected_asset))
         al.addLayout(row_asset_actions)
         self._asset_list.delete_requested.connect(self._delete_selected_asset)
+        self._asset_list.make_transparent_requested.connect(self._make_asset_transparent)
         left.addWidget(assets_box)
 
         palette_box = QWidget()
@@ -752,6 +754,7 @@ class MainWindow(QMainWindow):
         sprite_cfg = dlg.sprite_config()
         slice_frames = dlg.slice_into_library()
         keep_sheet = dlg.keep_full_sheet()
+        remove_bg = dlg.remove_background()
 
         if slice_frames:
             sliced = slice_sprite_sheet_to_library(
@@ -761,6 +764,9 @@ class MainWindow(QMainWindow):
                 sprite_cfg,
                 base_name=p.stem,
             )
+            if remove_bg:
+                for frame in sliced:
+                    self._strip_background(frame)
             self._log_panel.append_log(
                 f"Sliced {len(sliced)} frame(s) into asset library."
             )
@@ -774,6 +780,8 @@ class MainWindow(QMainWindow):
                 is_sprite_sheet=True,
             )
             entry.sprite_config = sprite_cfg.to_dict()
+            if remove_bg:
+                self._strip_background(entry)
             new_id = entry.id
             self._log_panel.append_log(
                 f"Imported sprite sheet '{entry.name}' "
@@ -784,6 +792,47 @@ class MainWindow(QMainWindow):
         self._set_dirty(True)
         if new_id and self._asset_list.select_asset(new_id):
             self._show_asset_preview(self._project.manifest.get_asset(new_id))
+
+    def _strip_background(self, asset) -> int:  # noqa: ANN001
+        """Knock out an asset's solid background in place; returns pixels cleared."""
+        if self._project is None:
+            return 0
+        path = resolve_asset_path(self._project.root, asset)
+        if not path.is_file():
+            return 0
+        try:
+            return make_background_transparent(path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Background removal failed for %s: %s", asset.name, exc)
+            return 0
+
+    def _make_asset_transparent(self) -> None:
+        if not self._project:
+            return
+        row = self._asset_list.currentRow()
+        if row < 0 or row >= len(self._project.manifest.assets):
+            QMessageBox.information(self, "Select asset", "Select an asset from the list first.")
+            return
+        asset = self._project.manifest.assets[row]
+        path = resolve_asset_path(self._project.root, asset)
+        if not path.is_file():
+            QMessageBox.warning(self, "Missing file", f"Asset file not found for '{asset.name}'.")
+            return
+        cleared = self._strip_background(asset)
+        if cleared == 0:
+            self._log_panel.append_log(
+                f"No solid background found in '{asset.name}' (nothing made transparent)."
+            )
+            return
+        self._log_panel.append_log(
+            f"Made background transparent in '{asset.name}' ({cleared} pixels cleared)."
+        )
+        # The library file changed in place: refresh preview and re-render any
+        # control/background that uses it.
+        self._show_asset_preview(asset)
+        if self._current_screen_id:
+            self._scene.load_screen(self._current_screen())
+        self._mark_live_dirty()
 
     def _set_background(self) -> None:
         if not self._project or not self._current_screen_id:
