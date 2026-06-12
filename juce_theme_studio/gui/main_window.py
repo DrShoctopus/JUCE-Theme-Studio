@@ -606,14 +606,16 @@ class MainWindow(QMainWindow):
             "",
             "Images (*.png *.jpg *.jpeg *.webp);;Fonts (*.ttf *.otf);;All (*)",
         )
-        imported_any = False
+        last_id = None
         for p in paths:
             entry = import_asset(self._project.manifest, self._project.root, Path(p))
             self._log_panel.append_log(f"Imported asset: {entry.name}")
-            imported_any = True
+            last_id = entry.id
         self._refresh_ui()
-        if imported_any:
+        if last_id:
             self._set_dirty(True)
+            if self._asset_list.select_asset(last_id):
+                self._show_asset_preview(self._project.manifest.get_asset(last_id))
 
     def _offer_import_project_assets(self) -> None:
         if not self._project or not self._project.scan_result:
@@ -763,6 +765,7 @@ class MainWindow(QMainWindow):
                 f"Sliced {len(sliced)} frame(s) into asset library."
             )
 
+        new_id = None
         if keep_sheet or not slice_frames:
             entry = import_asset(
                 self._project.manifest,
@@ -771,10 +774,16 @@ class MainWindow(QMainWindow):
                 is_sprite_sheet=True,
             )
             entry.sprite_config = sprite_cfg.to_dict()
-            self._log_panel.append_log(f"Imported sprite sheet: {entry.name}")
+            new_id = entry.id
+            self._log_panel.append_log(
+                f"Imported sprite sheet '{entry.name}' "
+                f"({sprite_cfg.frame_count} frames). Assign it to a knob/button to animate."
+            )
 
         self._refresh_ui()
         self._set_dirty(True)
+        if new_id and self._asset_list.select_asset(new_id):
+            self._show_asset_preview(self._project.manifest.get_asset(new_id))
 
     def _set_background(self) -> None:
         if not self._project or not self._current_screen_id:
