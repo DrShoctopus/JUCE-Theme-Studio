@@ -206,6 +206,14 @@ class CanvasScene(QGraphicsScene):
         if self.screen:
             self.load_screen(self.screen)
 
+    def update_control(self, control_id: str) -> bool:
+        """Refresh a single control's item in place (no full canvas rebuild)."""
+        item = self._items.get(control_id)
+        if item is None:
+            return False
+        item.update_from_control(self.preview_mode, self.button_preview_state)
+        return True
+
     def set_preview_mode(self, enabled: bool) -> None:
         self.preview_mode = enabled
         for item in self._items.values():

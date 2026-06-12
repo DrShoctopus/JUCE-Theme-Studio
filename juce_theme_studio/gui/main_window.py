@@ -10,7 +10,7 @@ from pathlib import Path
 from PIL import Image
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QKeySequence, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -108,6 +108,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("JUCE Theme Studio")
         self.resize(1400, 900)
+        # Hold decoded sprite frames in cache so canvas reloads don't re-decode
+        # the same images (pages can have 100+ sprite controls).
+        QPixmapCache.setCacheLimit(96 * 1024)  # 96 MB
 
         self._project: LoadedProject | None = None
         self._current_screen_id: str | None = None
@@ -914,17 +917,11 @@ class MainWindow(QMainWindow):
             self._layers.select_control(control.id)
 
     def _on_properties_changed(self) -> None:
-        cid = None
+        # Live edits update only the selected item in place; rebuilding the whole
+        # canvas here janks pages with many sprite controls.
         sel = self._scene.get_selected_control()
-        if sel:
-            cid = sel.id
-        self._restoring_selection = True
-        try:
+        if sel and not self._scene.update_control(sel.id):
             self._scene.refresh_all()
-            if cid:
-                self._scene.select_control(cid)
-        finally:
-            self._restoring_selection = False
         self._mark_live_dirty()
 
     def _on_property_commit(self) -> None:

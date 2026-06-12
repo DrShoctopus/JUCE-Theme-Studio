@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal  # QPointF used in itemChange
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap, QPixmapCache
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsObject, QGraphicsTextItem
 
 from juce_theme_studio.core.assets import resolve_asset_path
@@ -94,15 +94,36 @@ class ControlGraphicsItem(QGraphicsObject):
         path = resolve_asset_path(self.project_root, asset)
         if not path.is_file():
             return
+        # Decoding a frame from disk costs ~10-20ms; many controls share the same
+        # sprite/frame and a full canvas reload rebuilds them all, so cache the
+        # decoded pixmap (keyed by file mtime + frame params) to keep edits snappy.
+        sc = self.control.sprite_config
         try:
-            if self.control.sprite_config and asset.is_sprite_sheet:
-                frame_idx = self._current_frame_index()
-                img = extract_frame(path, self.control.sprite_config, frame_idx)
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            return
+        if sc and asset.is_sprite_sheet:
+            frame_idx = self._current_frame_index()
+            key = (
+                f"{path}|{mtime}|f{frame_idx}|{sc.frame_width}x{sc.frame_height}"
+                f"|{sc.columns}x{sc.rows}|{sc.layout.value}"
+            )
+        else:
+            frame_idx = 0
+            key = f"{path}|{mtime}|whole"
+
+        cached = QPixmapCache.find(key)
+        if cached is not None and not cached.isNull():
+            self._pixmap = cached
+            return
+        try:
+            if sc and asset.is_sprite_sheet:
+                img = extract_frame(path, sc, frame_idx)
             else:
                 with Image.open(path) as img_raw:
                     img = img_raw.convert("RGBA")
-            qimg = ImageQt(img)
-            self._pixmap = QPixmap.fromImage(qimg)
+            self._pixmap = QPixmap.fromImage(ImageQt(img))
+            QPixmapCache.insert(key, self._pixmap)
         except Exception:
             self._pixmap = None
 
