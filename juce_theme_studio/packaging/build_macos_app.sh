@@ -57,6 +57,10 @@ if [[ ! -d "$STUDIO_APP" ]]; then
 fi
 echo "Built: $STUDIO_APP"
 
+# Ad-hoc sign so macOS does not report the app as damaged.
+echo "==> Signing JUCE Theme Studio .app (ad-hoc) …"
+codesign --deep --force --sign - "$STUDIO_APP"
+
 # ── 2. Package JUCE Theme Studio → DMG ───────────────────────────────────────
 echo "==> Packaging JUCE Theme Studio DMG …"
 STUDIO_DMG="$DIST_DIR/JUCE_Theme_Studio_${STUDIO_VERSION}.dmg"
@@ -102,6 +106,8 @@ else
 
     if [[ -n "$PREVIEW_APP" ]]; then
         echo "Built: $PREVIEW_APP"
+        echo "==> Signing JuceLivePreview .app (ad-hoc) …"
+        codesign --deep --force --sign - "$PREVIEW_APP"
         PREVIEW_DMG="$DIST_DIR/JuceLivePreview_${PREVIEW_VERSION}.dmg"
         make_dmg "$PREVIEW_APP" "JUCE Live Preview $PREVIEW_VERSION" "$PREVIEW_DMG"
         echo "Created: $PREVIEW_DMG"

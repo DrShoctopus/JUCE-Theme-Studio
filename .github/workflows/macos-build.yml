@@ -63,7 +63,7 @@ jobs:
         if: inputs.build_macos_app
         working-directory: juce_theme_studio
         run: bash packaging/build_macos_app.sh
-        # Produces: dist/JUCE Theme Studio.app
+        # Produces: dist/JUCE Theme Studio.app  (ad-hoc signed)
         #           dist/JUCE_Theme_Studio_<version>.dmg
 
       - name: Upload JUCE Theme Studio DMG
@@ -120,6 +120,8 @@ jobs:
             exit 1
           fi
           echo "Packaging: $APP_PATH"
+
+          codesign --deep --force --sign - "$APP_PATH"
 
           STAGING="$(mktemp -d)"
           cp -r "$APP_PATH" "$STAGING/"

@@ -3,45 +3,58 @@ JUCE Theme Studio — macOS build
 
 WHAT YOU DOWNLOADED
 -------------------
-This zip contains a macOS application (.app) built by GitHub Actions.
-It is unsigned, so macOS Gatekeeper may block it the first time you open it.
+This DMG contains a macOS application built by GitHub Actions.
+The app is ad-hoc signed but not notarized, so macOS Gatekeeper will
+show a security prompt the first time you open it.
 
-JUCE Theme Studio.app
-  The main theme editor. Double-click to launch.
+  JUCE Theme Studio.dmg
+    The main theme editor. Mount, drag to Applications, launch.
 
-JUCE Live Preview.app (separate zip, if you enabled that build)
-  Optional companion app for live native JUCE preview. In Theme Studio,
-  point Live JUCE Preview to this app.
-
-
-FIRST LAUNCH (unsigned app)
----------------------------
-If macOS says the app "cannot be opened" or is from an unidentified developer:
-
-  1. Right-click the .app → Open → Open again
-     — or —
-  2. System Settings → Privacy & Security → Open Anyway
-
-You only need to do this once per app.
+  JuceLivePreview.dmg  (separate download, if that build was enabled)
+    Optional companion app for live native JUCE preview.
 
 
 INSTALL
 -------
-  1. Unzip the download.
-  2. Drag JUCE Theme Studio.app to Applications (or run from Downloads).
-  3. Open the app using the steps above if Gatekeeper blocks it.
+  1. Open the .dmg file.
+  2. Drag the app to the Applications shortcut inside the DMG.
+  3. Eject the DMG.
+  4. Open the app — see Gatekeeper notes below if macOS blocks it.
+
+
+GATEKEEPER — FIRST LAUNCH
+--------------------------
+macOS may show one of two security messages for ad-hoc-signed apps:
+
+  MESSAGE: "JUCE Theme Studio cannot be opened because the developer
+            cannot be verified."
+  FIX:     Right-click (or Ctrl-click) the app → Open → Open
+
+  MESSAGE: "JUCE Theme Studio is damaged and can't be opened."
+  FIX:     Run this once in Terminal, then reopen the app:
+
+             xattr -cr "/Applications/JUCE Theme Studio.app"
+
+  ALTERNATIVE FOR EITHER:
+    System Settings → Privacy & Security → scroll down → Open Anyway
+
+You only need to do this once per app.
 
 
 LIVE JUCE PREVIEW (optional)
 ----------------------------
-  1. Unzip JUCE-Live-Preview-macOS.zip.
-  2. In Theme Studio: Live JUCE Preview panel → browse to JUCE Live Preview.app
-     (select the app bundle, or Contents/MacOS/JUCE Live Preview).
+  1. Mount and install JuceLivePreview from its DMG.
+  2. Apply the same Gatekeeper fix above if needed.
+  3. In Theme Studio: Live JUCE Preview panel → browse to
+     JUCE Live Preview.app in /Applications
+     (or select Contents/MacOS/JUCE Live Preview inside the bundle).
 
 
 DEVELOPER INSTALL (alternative)
--------------------------------
-If you prefer Python instead of the .app, use the python-wheel-macos artifact:
+--------------------------------
+If you prefer running from Python source instead of the .app:
 
   pip install juce_theme_studio-*.whl
   juce-theme-studio
+
+Copyright (c) 2026 Shoctopus — MIT License
