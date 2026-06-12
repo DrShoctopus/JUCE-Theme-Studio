@@ -9,9 +9,10 @@ from pathlib import Path
 
 from PIL import Image
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QAction, QKeySequence, QPixmap, QPixmapCache
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSplitter,
     QToolBar,
@@ -107,7 +109,14 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("JUCE Theme Studio")
-        self.resize(1400, 900)
+        # Fit small laptop screens: a window taller than the screen pushes the
+        # zoom bar/log offscreen and breaks modal dialog placement on macOS.
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            self.resize(min(1400, avail.width() - 40), min(900, avail.height() - 40))
+        else:
+            self.resize(1400, 900)
         # Hold decoded sprite frames in cache so canvas reloads don't re-decode
         # the same images (pages can have 100+ sprite controls).
         QPixmapCache.setCacheLimit(96 * 1024)  # 96 MB
@@ -127,6 +136,11 @@ class MainWindow(QMainWindow):
         # True while we programmatically re-select a control during a refresh, so
         # the selection handler does not overwrite the undo baseline mid-edit.
         self._restoring_selection = False
+        # Screen-list row that was current when the mouse last pressed on the
+        # list. itemClicked (fired on release) cannot otherwise tell a same-row
+        # refresh click apart from the release half of a row-changing click,
+        # whose currentRowChanged already loaded the screen on press.
+        self._screen_row_at_press = -1
 
         self._build_toolbar()
         self._build_menus()
@@ -227,6 +241,8 @@ class MainWindow(QMainWindow):
         self._screen_list = QListWidget()
         self._screen_list.currentRowChanged.connect(self._on_screen_selected)
         self._screen_list.itemClicked.connect(self._on_screen_item_clicked)
+        # eventFilter records the current row before each press moves it.
+        self._screen_list.viewport().installEventFilter(self)
         sl.addWidget(self._screen_list)
         row = QHBoxLayout()
         row.addWidget(self._btn("New Screen", self._new_screen))
@@ -272,7 +288,14 @@ class MainWindow(QMainWindow):
         pl.addWidget(self._palette)
         pl.addWidget(self._btn("Add Control", self._add_control))
         left.addWidget(palette_box)
-        left.setMaximumWidth(260)
+
+        # Scrollable for the same reason as the right column below: the
+        # column's minimum height must not force the window off small screens.
+        left_scroll = QScrollArea()
+        left_scroll.setWidget(left)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setMaximumWidth(260)
 
         self._scene = CanvasScene(ThemeManifest(), Path("."))
         self._canvas = CanvasView(self._scene)
@@ -324,19 +347,30 @@ class MainWindow(QMainWindow):
 
         self._live_panel = LivePreviewPanel(self._live_preview)
         right.addWidget(self._live_panel)
-        right.setMaximumWidth(340)
+
+        # The stacked panels' combined minimum height exceeds small laptop
+        # screens; scrolling the column lets the window itself stay on-screen.
+        right_scroll = QScrollArea()
+        right_scroll.setWidget(right)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setMaximumWidth(340)
 
         h_split = QSplitter()
-        h_split.addWidget(left)
+        h_split.addWidget(left_scroll)
         h_split.addWidget(canvas_container)
-        h_split.addWidget(right)
+        h_split.addWidget(right_scroll)
         h_split.setStretchFactor(1, 1)
 
         v_split = QSplitter(Qt.Orientation.Vertical)
         v_split.addWidget(h_split)
         self._log_panel = LogPanel()
         v_split.addWidget(self._log_panel)
-        v_split.setStretchFactor(0, 4)
+        # Give the log a compact ~1/8 strip (half its old height); window resize
+        # grows the canvas, not the log. Still drag-resizable; text scrolls.
+        v_split.setStretchFactor(0, 1)
+        v_split.setStretchFactor(1, 0)
+        v_split.setSizes([840, 120])
         main_layout.addWidget(v_split)
 
     @staticmethod
@@ -512,9 +546,75 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: ANN001
         if self._maybe_save_changes():
+            # Selection signals fired during teardown land in a half-deleted
+            # scene (RuntimeError: Internal C++ object already deleted).
+            self._scene.blockSignals(True)
             event.accept()
         else:
             event.ignore()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
+        if (
+            obj is self._screen_list.viewport()
+            and event.type() == QEvent.Type.MouseButtonPress
+        ):
+            # Selection moves on press, so this is the last moment the
+            # pre-click row is still known; _on_screen_item_clicked needs it
+            # to recognise the trailing itemClicked of a row-changing click.
+            self._screen_row_at_press = self._screen_list.currentRow()
+        return super().eventFilter(obj, event)
+
+    # --- macOS fullscreen workaround ---------------------------------------
+    # macOS 26 (Tahoe) + Qt 6.11 corrupt the QWindow geometry cache in native
+    # fullscreen Spaces: Qt keeps/reverts to stale window rects (no state
+    # change event fires, isFullScreen() reports False, the layout visibly
+    # reflows), so every mouse event - mapped local = global - cached_origin -
+    # lands offset from the UI. Sprites and the zoom bar stop responding where
+    # they are drawn. Qt-side geometry writes make it worse: Cocoa fights the
+    # write and eventually drops the window into a corrupted pseudo-fullscreen.
+    # Until the toolkit bug is fixed, keep the window out of fullscreen Spaces
+    # altogether: the green titlebar button zooms (maximises) instead, which
+    # looks near-identical and has shown pixel-accurate input in every test.
+
+    def showEvent(self, event) -> None:  # noqa: ANN001
+        super().showEvent(event)
+        self._disable_native_fullscreen()
+
+    def _disable_native_fullscreen(self) -> None:
+        if QApplication.platformName() != "cocoa":
+            return
+        try:
+            import ctypes
+
+            import objc  # pyobjc-framework-Cocoa
+
+            view = objc.objc_object(c_void_p=ctypes.c_void_p(int(self.winId())))
+            nswin = view.window()
+            if nswin is None:
+                return
+            behavior = int(nswin.collectionBehavior())
+            behavior &= ~(1 << 7)  # clear NSWindowCollectionBehaviorFullScreenPrimary
+            behavior |= 1 << 9  # NSWindowCollectionBehaviorFullScreenNone
+            nswin.setCollectionBehavior_(behavior)
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not disable native fullscreen", exc_info=True)
+
+    def _native_fullscreen(self) -> bool | None:
+        """Ground-truth fullscreen state from the NSWindow; None if unknown."""
+        if QApplication.platformName() != "cocoa":
+            return None
+        try:
+            import ctypes
+
+            import objc  # pyobjc-framework-Cocoa
+
+            view = objc.objc_object(c_void_p=ctypes.c_void_p(int(self.winId())))
+            nswin = view.window()
+            if nswin is None:
+                return None
+            return bool(int(nswin.styleMask()) & (1 << 14))  # NSWindowStyleMaskFullScreen
+        except Exception:  # noqa: BLE001
+            return None
 
     def _refresh_ui(self) -> None:
         if not self._project:
@@ -557,8 +657,15 @@ class MainWindow(QMainWindow):
         self._load_screen_at_row(row)
 
     def _on_screen_item_clicked(self, item: QListWidgetItem) -> None:
-        # Clicking the already-selected row does not emit currentRowChanged.
-        self._load_screen_at_row(self._screen_list.row(item))
+        row = self._screen_list.row(item)
+        if row != self._screen_row_at_press:
+            # The press half of this click moved the selection, so
+            # currentRowChanged already loaded this screen; loading it again
+            # here would rebuild the whole scene a second time.
+            return
+        # Clicking the already-selected row does not emit currentRowChanged;
+        # this reload is what lets a same-row click refresh the canvas.
+        self._load_screen_at_row(row)
 
     def _load_screen_at_row(self, row: int) -> None:
         if not self._project or row < 0 or row >= len(self._project.manifest.screens):
@@ -1363,7 +1470,19 @@ class MainWindow(QMainWindow):
         if result.backup_dir:
             lines.append(f"Backup: {result.backup_dir}")
         self._log_panel.append_log("\n".join(lines))
-        QMessageBox.information(self, "Export complete", "\n".join(lines))
+
+        # Keep the dialog a fixed, dismissable size: a per-file list (250+
+        # entries) grew the box past the screen and pushed OK out of reach.
+        # The full list is in the log panel; offer it here under "Show Details".
+        summary = f"{len(result.files_written)} file(s) written to:\n{result.export_dir}"
+        if result.backup_dir:
+            summary += f"\n\nBackup: {result.backup_dir}"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Export complete")
+        box.setText(summary)
+        box.setDetailedText("\n".join(lines))
+        box.exec()
         self._refresh_git_status()
 
     def _commit(self) -> None:

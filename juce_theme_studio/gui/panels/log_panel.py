@@ -12,6 +12,7 @@ class LogPanel(QWidget):
     def __init__(self) -> None:
         super().__init__()
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         self._tabs = QTabWidget()
 
         self._log = QTextEdit()
@@ -29,6 +30,11 @@ class LogPanel(QWidget):
         self._validation = QTextEdit()
         self._validation.setReadOnly(True)
         self._tabs.addTab(self._validation, "Validation")
+
+        # Let the panel shrink to a compact strip; each tab's QTextEdit keeps
+        # its own scrollbar so log history is never lost, only scrolled.
+        for edit in (self._log, self._warnings, self._git, self._validation):
+            edit.setMinimumHeight(40)
 
         layout.addWidget(self._tabs)
 
