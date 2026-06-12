@@ -56,6 +56,9 @@ class ControlGraphicsItem(QGraphicsObject):
         self.setZValue(control.z_index)
         self.setVisible(control.visible)
         self.setAcceptHoverEvents(True)
+        # Cache the rendered item so panning/zooming many sprite controls blits
+        # a bitmap instead of re-scaling each full-res frame every repaint.
+        self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         if not control.locked and not preview_mode:
