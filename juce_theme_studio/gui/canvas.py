@@ -275,6 +275,12 @@ class CanvasView(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        # Repaint the whole viewport instead of scroll-blitting. On macOS
+        # (layer-backed/Metal) the blit can silently fail: the picture stays
+        # where it was while the click mapping moves with the scroll, so items
+        # stop responding where they are drawn until the next full repaint
+        # (drifting a few px per pan; a page switch/fit "fixes" it).
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.setAcceptDrops(True)
         self._zoom = 1.0
         self._pending_fit = False

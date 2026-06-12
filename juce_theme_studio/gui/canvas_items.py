@@ -160,7 +160,9 @@ class ControlGraphicsItem(QGraphicsObject):
         if self._pixmap and not self._pixmap.isNull():
             # Fit the frame within the control bounds keeping its aspect ratio
             # (centred), so non-square art isn't stretched or clipped at the edges.
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            # NOTE: no SmoothPixmapTransform — smooth-scaling sprites per repaint
+            # froze the canvas on scaled high-DPI views (fine at DPR=1, very slow
+            # on Retina/Metal when zooming repaints every sprite).
             pw, ph = self._pixmap.width(), self._pixmap.height()
             scale = min(rect.width() / pw, rect.height() / ph) if pw and ph else 1.0
             dw, dh = pw * scale, ph * scale
