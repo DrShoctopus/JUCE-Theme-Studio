@@ -85,3 +85,51 @@ def test_save_clears_dirty_marker(window) -> None:
     window._save_project()
     assert not window._dirty
     assert "*" not in window.windowTitle()
+
+
+def test_screen_list_click_loads_scene_once(window) -> None:
+    """A row-changing click loads the scene exactly once, not twice.
+
+    Qt fires currentRowChanged on the press and itemClicked on the release of
+    the same physical click, so naive wiring rebuilds the scene twice per
+    click. A click on the already-selected row fires only itemClicked and must
+    still reload (the canvas-refresh path).
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from juce_theme_studio.core.project import create_manual_screen
+
+    create_manual_screen(window._project.manifest, "Second", 800, 600)
+    window._refresh_ui()
+    window.show()
+    QApplication.processEvents()
+
+    calls: list[str] = []
+    real_load = window._scene.load_screen
+
+    def counting_load(screen) -> None:  # noqa: ANN001
+        calls.append(screen.id)
+        real_load(screen)
+
+    window._scene.load_screen = counting_load
+
+    def click(row: int) -> None:
+        rect = window._screen_list.visualItemRect(window._screen_list.item(row))
+        QTest.mouseClick(
+            window._screen_list.viewport(),
+            Qt.MouseButton.LeftButton,
+            pos=rect.center(),
+        )
+
+    other = 1 if window._screen_list.currentRow() == 0 else 0
+    other_id = window._project.manifest.screens[other].id
+
+    click(other)
+    assert calls == [other_id], "row-changing click must load exactly once"
+    assert window._current_screen_id == other_id
+
+    click(other)
+    assert calls == [other_id, other_id], "same-row click must still reload"
+
+    window.hide()

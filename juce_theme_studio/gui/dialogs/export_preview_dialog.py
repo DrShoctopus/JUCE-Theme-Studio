@@ -30,6 +30,10 @@ class ExportPreviewDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Export Preview")
         self.setMinimumSize(640, 480)
+        # Assign before wiring the list: setCurrentRow below fires
+        # _show_detail synchronously, which reads these.
+        self._manifest = manifest
+        self._root = project_root
 
         layout = QVBoxLayout(self)
         files = preview_export_files(manifest, project_root)
@@ -65,9 +69,6 @@ class ExportPreviewDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-
-        self._manifest = manifest
-        self._root = project_root
 
     def _show_detail(self, rel_path: str) -> None:
         if not rel_path:

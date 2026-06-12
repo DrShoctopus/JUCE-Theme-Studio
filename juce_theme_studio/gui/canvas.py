@@ -206,6 +206,14 @@ class CanvasScene(QGraphicsScene):
         if self.screen:
             self.load_screen(self.screen)
 
+    def update_control(self, control_id: str) -> bool:
+        """Refresh a single control's item in place (no full canvas rebuild)."""
+        item = self._items.get(control_id)
+        if item is None:
+            return False
+        item.update_from_control(self.preview_mode, self.button_preview_state)
+        return True
+
     def set_preview_mode(self, enabled: bool) -> None:
         self.preview_mode = enabled
         for item in self._items.values():
@@ -256,6 +264,7 @@ class CanvasScene(QGraphicsScene):
 class CanvasView(QGraphicsView):
     # asset_id, x, y, is_sprite, target_control_id (empty = new control)
     asset_dropped = Signal(str, int, int, bool, str)
+    zoom_changed = Signal(float)  # current zoom factor (1.0 == 100%)
 
     ZOOM_MIN = 0.1
     ZOOM_MAX = 5.0
@@ -266,6 +275,12 @@ class CanvasView(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        # Repaint the whole viewport instead of scroll-blitting. On macOS
+        # (layer-backed/Metal) the blit can silently fail: the picture stays
+        # where it was while the click mapping moves with the scroll, so items
+        # stop responding where they are drawn until the next full repaint
+        # (drifting a few px per pan; a page switch/fit "fixes" it).
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.setAcceptDrops(True)
         self._zoom = 1.0
         self._pending_fit = False
@@ -284,10 +299,21 @@ class CanvasView(QGraphicsView):
             else QGraphicsView.DragMode.RubberBandDrag
         )
 
+    def current_zoom(self) -> float:
+        return self._zoom
+
+    def set_zoom(self, zoom: float) -> None:
+        """Set absolute zoom (clamped). Used by the zoom bar."""
+        z = max(self.ZOOM_MIN, min(self.ZOOM_MAX, zoom))
+        if abs(z - self._zoom) < 1e-6:
+            return
+        self._apply_zoom(z)
+
     def _apply_zoom(self, zoom: float) -> None:
         self._zoom = zoom
         self.resetTransform()
         self.scale(self._zoom, self._zoom)
+        self.zoom_changed.emit(self._zoom)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasFormat(MIME_ASSET_ID):
@@ -322,12 +348,27 @@ class CanvasView(QGraphicsView):
         event.acceptProposedAction()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        factor = self.ZOOM_STEP if event.angleDelta().y() > 0 else 1 / self.ZOOM_STEP
-        new_zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom * factor))
-        if abs(new_zoom - self._zoom) < 1e-6:
+        # Plain wheel / two-finger touchpad scroll pans the canvas; zooming is
+        # done with the zoom bar (or Ctrl/Cmd+wheel as a shortcut).
+        zoom_mod = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier
+        if event.modifiers() & zoom_mod:
+            factor = self.ZOOM_STEP if event.angleDelta().y() > 0 else 1 / self.ZOOM_STEP
+            new_zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom * factor))
+            if abs(new_zoom - self._zoom) >= 1e-6:
+                self._apply_zoom(new_zoom)
             event.accept()
             return
-        self._apply_zoom(new_zoom)
+
+        pixel = event.pixelDelta()
+        if not pixel.isNull():
+            dx, dy = pixel.x(), pixel.y()
+        else:
+            angle = event.angleDelta()
+            dx, dy = angle.x(), angle.y()
+        hbar = self.horizontalScrollBar()
+        vbar = self.verticalScrollBar()
+        hbar.setValue(hbar.value() - dx)
+        vbar.setValue(vbar.value() - dy)
         event.accept()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -356,4 +397,5 @@ class CanvasView(QGraphicsView):
             self.resetTransform()
             self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
             self._zoom = self.transform().m11()
+            self.zoom_changed.emit(self._zoom)
         self._pending_fit = False

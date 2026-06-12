@@ -60,6 +60,16 @@ class SpriteConfig:
     track_asset_id: str | None = None
     thumb_asset_id: str | None = None
 
+    def __post_init__(self) -> None:
+        # Qt widget data and JSON loads hand these back as plain strings; a str
+        # layout used to crash to_dict() mid-import, leaving a half-added asset.
+        if not isinstance(self.layout, SpriteLayout):
+            self.layout = SpriteLayout(self.layout)
+        if not isinstance(self.button_mode, ButtonMode):
+            self.button_mode = ButtonMode(self.button_mode)
+        if not isinstance(self.meter_orientation, MeterOrientation):
+            self.meter_orientation = MeterOrientation(self.meter_orientation)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "layout": self.layout.value,
