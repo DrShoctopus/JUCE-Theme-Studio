@@ -309,6 +309,14 @@ def _is_sha256_checksum(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(ch in _HEX_DIGITS for ch in value)
 
 
+def _safe_record_checksum(value: Any) -> str | None:
+    if value is None or value == "":
+        return ""
+    if not _is_sha256_checksum(value):
+        return None
+    return str(value).lower()
+
+
 def _record_timestamp(record: dict[str, Any]) -> datetime | None:
     for key in ("completed_at", "created_at"):
         value = record.get(key)
@@ -340,7 +348,12 @@ def _validated_history_operation(
     source_rel = _safe_relative_record_path(item.get("source_rel"))
     target_rel = _safe_record_target_rel(project_root, item.get("target_rel"))
     source_checksum = item.get("source_checksum")
+    target_checksum = _safe_record_checksum(item.get("target_checksum", ""))
     if source_rel is None or target_rel is None or not _is_sha256_checksum(source_checksum):
+        return None
+    if target_checksum is None:
+        return None
+    if kind == ApplyOperationKind.REPLACE.value and not target_checksum:
         return None
 
     operation = dict(item)
@@ -348,12 +361,48 @@ def _validated_history_operation(
     operation["source_rel"] = source_rel
     operation["target_rel"] = target_rel
     operation["source_checksum"] = source_checksum.lower()
-    operation["backup_rel"] = _safe_record_backup_rel(
-        project_root,
-        item.get("backup_rel"),
-        backup_root=backup_root,
-    )
+    operation["target_checksum"] = target_checksum
+    if kind == ApplyOperationKind.REPLACE.value:
+        backup_rel = _validated_replace_backup_rel(
+            project_root,
+            item.get("backup_rel"),
+            backup_root=backup_root,
+            target_checksum=target_checksum,
+        )
+        if backup_rel is None:
+            return None
+        operation["backup_rel"] = backup_rel
+    else:
+        operation["backup_rel"] = _safe_record_backup_rel(
+            project_root,
+            item.get("backup_rel"),
+            backup_root=backup_root,
+        )
     return operation
+
+
+def _validated_replace_backup_rel(
+    project_root: Path,
+    value: Any,
+    *,
+    backup_root: Path | None,
+    target_checksum: str,
+) -> str | None:
+    if backup_root is None:
+        return None
+    backup_rel = _safe_record_backup_rel(project_root, value, backup_root=backup_root)
+    if not backup_rel:
+        return None
+    backup = project_root / backup_rel
+    try:
+        _reject_symlinked_project_components(project_root, backup, label="backup")
+    except RuntimeError:
+        return None
+    if not backup.is_file() or backup.is_symlink():
+        return None
+    if sha256_file(backup) != target_checksum:
+        return None
+    return backup_rel
 
 
 def _validated_completed_record(
@@ -441,6 +490,14 @@ def _history_record_path_is_safe(project_root: Path, path: Path) -> bool:
 def completed_apply_records(project_root: Path) -> list[dict[str, Any]]:
     project_root = project_root.resolve()
     applies = _applies_dir(project_root)
+    try:
+        _reject_symlinked_project_components(
+            project_root,
+            applies,
+            label="apply history directory",
+        )
+    except RuntimeError:
+        return []
     records: list[tuple[bool, datetime, str, dict[str, Any]]] = []
     for path in sorted(applies.glob("*/apply.json")):
         if not _history_record_path_is_safe(project_root, path):
@@ -474,9 +531,11 @@ def _latest_managed_checksums(project_root: Path) -> dict[str, str]:
     latest = latest_completed_apply(project_root)
     if not latest:
         return {}
+    transaction_dir = latest.get("transaction_dir")
+    backup_root = Path(transaction_dir) / "backups" if isinstance(transaction_dir, str) else None
     checksums: dict[str, str] = {}
     for item in latest.get("operations", []):
-        operation = _validated_history_operation(project_root, item)
+        operation = _validated_history_operation(project_root, item, backup_root=backup_root)
         if operation:
             checksums[operation["target_rel"]] = operation["source_checksum"]
     return checksums
@@ -661,7 +720,14 @@ def _safe_copy_backup_file(
         raise
 
 
-def _safe_copy_target_file(plan: ApplyPlan, op: ApplyOperation, source: Path, target: Path) -> str:
+def _safe_copy_target_file(
+    plan: ApplyPlan,
+    op: ApplyOperation,
+    source: Path,
+    target: Path,
+    *,
+    unverified_writes: list[dict[str, str]] | None = None,
+) -> str:
     target_rel = _rel(target, plan.project_root)
     _ensure_safe_project_directory(plan.project_root, target.parent, label="target parent")
     _reject_symlinked_target_components(plan, op)
@@ -687,7 +753,15 @@ def _safe_copy_target_file(plan: ApplyPlan, op: ApplyOperation, source: Path, ta
 
         temp.replace(target)
         _reject_symlinked_target_components(plan, op)
-        if sha256_file(target) != op.source_checksum:
+        observed_checksum = sha256_file(target)
+        if observed_checksum != op.source_checksum:
+            if unverified_writes is not None:
+                unverified_writes.append(
+                    {
+                        "target_rel": target_rel,
+                        "observed_checksum": observed_checksum,
+                    }
+                )
             raise RuntimeError(f"{op.target_rel} copied checksum mismatch")
         return target_rel
     except Exception:
@@ -710,6 +784,7 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
     files_written: list[str] = []
     files_touched: list[str] = []
     backups: list[str] = []
+    unverified_writes: list[dict[str, str]] = []
     completed_ops: list[ApplyOperation] = []
 
     try:
@@ -736,7 +811,15 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
                 backups.append(backup_rel)
 
             files_touched.append(target_rel)
-            files_written.append(_safe_copy_target_file(plan, op, source, target))
+            files_written.append(
+                _safe_copy_target_file(
+                    plan,
+                    op,
+                    source,
+                    target,
+                    unverified_writes=unverified_writes,
+                )
+            )
             completed_ops.append(op)
 
         plan.operations = completed_ops
@@ -748,6 +831,7 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
             files_written=files_written,
             files_touched=files_touched,
             backups=backups,
+            unverified_writes=unverified_writes,
         )
         raise
 
@@ -856,6 +940,7 @@ def _write_failed_record(
     files_written: list[str] | None = None,
     files_touched: list[str] | None = None,
     backups: list[str] | None = None,
+    unverified_writes: list[dict[str, str]] | None = None,
 ) -> None:
     existing = _read_apply_record(plan.record_path) or {}
     data = {
@@ -871,6 +956,7 @@ def _write_failed_record(
         "files_written": files_written or [],
         "files_touched": files_touched or [],
         "backups": backups or [],
+        "unverified_writes": unverified_writes or [],
     }
     if isinstance(existing.get("created_at"), str):
         data["created_at"] = existing["created_at"]

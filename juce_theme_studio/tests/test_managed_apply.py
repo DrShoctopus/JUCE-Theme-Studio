@@ -61,6 +61,46 @@ def _history_operation(target_rel: str, source_checksum: str) -> dict[str, str]:
     }
 
 
+def _write_history_backup(
+    project_root: Path,
+    apply_id: str,
+    target_rel: str,
+    content: str = "previous managed target\n",
+) -> tuple[str, str]:
+    from juce_theme_studio.core.managed_apply import sha256_file
+
+    backup = (
+        project_root
+        / ".juce_theme_studio"
+        / "applies"
+        / apply_id
+        / "backups"
+        / target_rel
+    )
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    backup.write_text(content, encoding="utf-8")
+    return str(backup.relative_to(project_root)).replace("\\", "/"), sha256_file(backup)
+
+
+def _history_replace_operation(
+    project_root: Path,
+    apply_id: str,
+    target_rel: str,
+    source_checksum: str,
+    backup_content: str = "previous managed target\n",
+) -> dict[str, str]:
+    operation = _history_operation(target_rel, source_checksum)
+    backup_rel, target_checksum = _write_history_backup(
+        project_root,
+        apply_id,
+        target_rel,
+        backup_content,
+    )
+    operation["backup_rel"] = backup_rel
+    operation["target_checksum"] = target_checksum
+    return operation
+
+
 def _completed_record(
     operation: dict[str, str],
     *,
@@ -300,7 +340,12 @@ def test_plan_replaces_when_latest_completed_record_matches_target_checksum(
     )
 
     checksum = sha256_file(target)
-    operation = _history_operation("Source/ThemeStudio/ThemeLayout.json", checksum)
+    operation = _history_replace_operation(
+        loaded.root,
+        "managed-before",
+        "Source/ThemeStudio/ThemeLayout.json",
+        checksum,
+    )
     _write_apply_record(loaded.root, "managed-before", _completed_record(operation))
 
     plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="replace-plan")
@@ -324,8 +369,18 @@ def test_latest_completed_apply_uses_completed_timestamp_over_path_sort(
     )
 
     newer_checksum = sha256_file(target)
-    newer = _history_operation("Source/ThemeStudio/ThemeLayout.json", newer_checksum)
-    older = _history_operation("Source/ThemeStudio/ThemeLayout.json", "0" * 64)
+    newer = _history_replace_operation(
+        loaded.root,
+        "a-newer",
+        "Source/ThemeStudio/ThemeLayout.json",
+        newer_checksum,
+    )
+    older = _history_replace_operation(
+        loaded.root,
+        "z-older",
+        "Source/ThemeStudio/ThemeLayout.json",
+        "0" * 64,
+    )
     _write_apply_record(
         loaded.root,
         "a-newer",
@@ -358,8 +413,18 @@ def test_latest_completed_apply_falls_back_to_created_timestamp(
     )
 
     newer_checksum = sha256_file(target)
-    newer = _history_operation("Source/ThemeStudio/ThemeLayout.json", newer_checksum)
-    older = _history_operation("Source/ThemeStudio/ThemeLayout.json", "0" * 64)
+    newer = _history_replace_operation(
+        loaded.root,
+        "a-newer-created",
+        "Source/ThemeStudio/ThemeLayout.json",
+        newer_checksum,
+    )
+    older = _history_replace_operation(
+        loaded.root,
+        "z-older-created",
+        "Source/ThemeStudio/ThemeLayout.json",
+        "0" * 64,
+    )
     _write_apply_record(
         loaded.root,
         "a-newer-created",
@@ -467,7 +532,12 @@ def test_partially_invalid_completed_record_is_ignored(fixture_project: Path) ->
         sha256_file,
     )
 
-    valid = _history_operation("Source/ThemeStudio/ThemeLayout.json", sha256_file(target))
+    valid = _history_replace_operation(
+        loaded.root,
+        "partial-invalid",
+        "Source/ThemeStudio/ThemeLayout.json",
+        sha256_file(target),
+    )
     invalid = _history_operation("../escape.json", sha256_file(target))
     _write_apply_record(
         loaded.root,
@@ -486,22 +556,124 @@ def test_partially_invalid_completed_record_is_ignored(fixture_project: Path) ->
     assert layout.kind == ApplyOperationKind.CONFLICT
 
 
-def test_completed_apply_records_clear_invalid_backup_rel(fixture_project: Path) -> None:
+def test_completed_apply_records_ignore_replace_with_invalid_target_checksum(
+    fixture_project: Path,
+) -> None:
     loaded = _project_with_theme(fixture_project)
     target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"
     target.parent.mkdir(parents=True)
-    target.write_text("managed layout\n", encoding="utf-8")
+    target.write_text("hand edited\n", encoding="utf-8")
 
-    from juce_theme_studio.core.managed_apply import completed_apply_records, sha256_file
+    from juce_theme_studio.core.managed_apply import (
+        ApplyOperationKind,
+        plan_managed_apply,
+        sha256_file,
+    )
 
-    operation = _history_operation("Source/ThemeStudio/ThemeLayout.json", sha256_file(target))
-    operation["backup_rel"] = "Source/ThemeStudio/ThemeLayout.json"
-    _write_apply_record(loaded.root, "bad-backup-rel", _completed_record(operation))
+    apply_id = "bad-target-checksum"
+    operation = _history_replace_operation(
+        loaded.root,
+        apply_id,
+        "Source/ThemeStudio/ThemeLayout.json",
+        sha256_file(target),
+    )
+    operation["target_checksum"] = "not-a-checksum"
+    _write_apply_record(loaded.root, apply_id, _completed_record(operation))
 
-    records = completed_apply_records(loaded.root)
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="bad-target-plan")
 
-    assert records
-    assert records[-1]["operations"][0]["backup_rel"] == ""
+    layout = next(op for op in plan.operations if op.target_rel.endswith("ThemeLayout.json"))
+    assert layout.kind == ApplyOperationKind.CONFLICT
+
+
+def test_completed_apply_records_ignore_replace_without_backup_rel(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+    target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("hand edited\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import (
+        ApplyOperationKind,
+        plan_managed_apply,
+        sha256_file,
+    )
+
+    apply_id = "missing-backup-rel"
+    operation = _history_replace_operation(
+        loaded.root,
+        apply_id,
+        "Source/ThemeStudio/ThemeLayout.json",
+        sha256_file(target),
+    )
+    operation["backup_rel"] = ""
+    _write_apply_record(loaded.root, apply_id, _completed_record(operation))
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="missing-backup-plan")
+
+    layout = next(op for op in plan.operations if op.target_rel.endswith("ThemeLayout.json"))
+    assert layout.kind == ApplyOperationKind.CONFLICT
+
+
+def test_completed_apply_records_ignore_replace_when_backup_missing(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+    target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("hand edited\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import (
+        ApplyOperationKind,
+        plan_managed_apply,
+        sha256_file,
+    )
+
+    apply_id = "backup-missing"
+    operation = _history_replace_operation(
+        loaded.root,
+        apply_id,
+        "Source/ThemeStudio/ThemeLayout.json",
+        sha256_file(target),
+    )
+    (loaded.root / operation["backup_rel"]).unlink()
+    _write_apply_record(loaded.root, apply_id, _completed_record(operation))
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="backup-missing-plan")
+
+    layout = next(op for op in plan.operations if op.target_rel.endswith("ThemeLayout.json"))
+    assert layout.kind == ApplyOperationKind.CONFLICT
+
+
+def test_completed_apply_records_ignore_replace_when_backup_checksum_mismatches(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+    target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("hand edited\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import (
+        ApplyOperationKind,
+        plan_managed_apply,
+        sha256_file,
+    )
+
+    apply_id = "backup-checksum-mismatch"
+    operation = _history_replace_operation(
+        loaded.root,
+        apply_id,
+        "Source/ThemeStudio/ThemeLayout.json",
+        sha256_file(target),
+    )
+    (loaded.root / operation["backup_rel"]).write_text("different backup\n", encoding="utf-8")
+    _write_apply_record(loaded.root, apply_id, _completed_record(operation))
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="backup-mismatch-plan")
+
+    layout = next(op for op in plan.operations if op.target_rel.endswith("ThemeLayout.json"))
+    assert layout.kind == ApplyOperationKind.CONFLICT
 
 
 def test_completed_apply_records_ignore_mismatched_apply_id(fixture_project: Path) -> None:
@@ -880,6 +1052,47 @@ def test_execute_managed_apply_fails_when_copied_target_checksum_mismatches(
     assert target_rel in record["files_touched"]
 
 
+def test_execute_managed_apply_records_unverified_write_after_replace_checksum_failure(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="unverified-write")
+    target_rel = next(op.target_rel for op in plan.operations if op.target_rel.endswith(".json"))
+    target = fixture_project / target_rel
+    real_sha256 = managed_apply_module.sha256_file
+    corrupted = False
+
+    def corrupt_replaced_target(path: Path) -> str:
+        nonlocal corrupted
+        candidate = Path(path)
+        if candidate == target and target.exists() and not corrupted:
+            target.write_text("corrupt after replace\n", encoding="utf-8")
+            corrupted = True
+        return real_sha256(candidate)
+
+    monkeypatch.setattr(managed_apply_module, "sha256_file", corrupt_replaced_target)
+
+    with pytest.raises(RuntimeError, match="checksum"):
+        execute_managed_apply(plan)
+
+    record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert target.read_text(encoding="utf-8") == "corrupt after replace\n"
+    assert record["status"] == "failed"
+    assert target_rel not in record["files_written"]
+    assert target_rel in record["files_touched"]
+    assert record["unverified_writes"] == [
+        {
+            "target_rel": target_rel,
+            "observed_checksum": real_sha256(target),
+        }
+    ]
+
+
 def test_execute_managed_apply_fails_before_overwrite_when_backup_checksum_mismatches(
     fixture_project: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -981,9 +1194,10 @@ def test_execute_managed_apply_rejects_record_symlink_before_completed_record_wr
         op: managed_apply_module.ApplyOperation,
         source: Path,
         target: Path,
+        **kwargs: object,
     ) -> str:
         nonlocal swapped
-        result = real_copy_target(plan_arg, op, source, target)
+        result = real_copy_target(plan_arg, op, source, target, **kwargs)
         if not swapped:
             plan.record_path.unlink()
             plan.record_path.symlink_to(redirected_record)
