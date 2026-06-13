@@ -183,6 +183,28 @@ def _safe_record_target_rel(project_root: Path, value: Any) -> str | None:
         return None
 
 
+def _safe_record_backup_rel(
+    project_root: Path,
+    value: Any,
+    *,
+    backup_root: Path | None = None,
+) -> str:
+    if not value:
+        return ""
+    if not isinstance(value, str):
+        return ""
+    try:
+        backup = _safe_project_subdir(project_root, value, label="backup")
+    except ValueError:
+        return ""
+    if backup_root is not None:
+        try:
+            backup.relative_to(backup_root.resolve())
+        except ValueError:
+            return ""
+    return _rel(backup, project_root)
+
+
 def _is_sha256_checksum(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(ch in _HEX_DIGITS for ch in value)
 
@@ -205,6 +227,8 @@ def _record_timestamp(record: dict[str, Any]) -> datetime | None:
 def _validated_history_operation(
     project_root: Path,
     item: Any,
+    *,
+    backup_root: Path | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
@@ -224,12 +248,19 @@ def _validated_history_operation(
     operation["source_rel"] = source_rel
     operation["target_rel"] = target_rel
     operation["source_checksum"] = source_checksum.lower()
+    operation["backup_rel"] = _safe_record_backup_rel(
+        project_root,
+        item.get("backup_rel"),
+        backup_root=backup_root,
+    )
     return operation
 
 
 def _validated_completed_record(
     project_root: Path,
     record: dict[str, Any] | None,
+    *,
+    record_path: Path | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(record, dict) or record.get("status") != ApplyStatus.COMPLETED.value:
         return None
@@ -238,10 +269,18 @@ def _validated_completed_record(
     if not isinstance(operations, list):
         return None
 
+    backup_root = record_path.parent / "backups" if record_path is not None else None
     valid_operations = [
         operation
         for item in operations
-        if (operation := _validated_history_operation(project_root, item)) is not None
+        if (
+            operation := _validated_history_operation(
+                project_root,
+                item,
+                backup_root=backup_root,
+            )
+        )
+        is not None
     ]
     if not valid_operations:
         return None
@@ -268,7 +307,11 @@ def completed_apply_records(project_root: Path) -> list[dict[str, Any]]:
     applies = _applies_dir(project_root)
     records: list[tuple[bool, datetime, str, dict[str, Any]]] = []
     for path in sorted(applies.glob("*/apply.json")):
-        record = _validated_completed_record(project_root, _read_apply_record(path))
+        record = _validated_completed_record(
+            project_root,
+            _read_apply_record(path),
+            record_path=path,
+        )
         if record is None:
             continue
         timestamp = _record_timestamp(record)
@@ -415,7 +458,7 @@ def plan_managed_apply(
 
 def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
     if plan.has_conflicts:
-        _mark_record_status(plan.record_path, ApplyStatus.FAILED, "Plan contains conflicts")
+        _write_failed_record(plan, "Plan contains conflicts")
         raise RuntimeError("Cannot apply while conflicts are present")
 
     files_written: list[str] = []
@@ -444,10 +487,12 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
                 backups.append(op.backup_rel)
 
             shutil.copy2(source, target)
+            if sha256_file(target) != op.source_checksum:
+                raise RuntimeError(f"{op.target_rel} copied checksum mismatch")
             files_written.append(_rel(target, plan.project_root))
             completed_ops.append(op)
     except Exception as exc:
-        _mark_record_status(plan.record_path, ApplyStatus.FAILED, str(exc))
+        _write_failed_record(plan, str(exc), files_written=files_written, backups=backups)
         raise
 
     plan.status = ApplyStatus.COMPLETED
@@ -507,10 +552,29 @@ def _write_completed_record(plan: ApplyPlan) -> None:
     plan.record_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def _mark_record_status(record_path: Path, status: ApplyStatus, message: str) -> None:
-    data = _read_apply_record(record_path) or {}
-    data["status"] = status.value
-    data["message"] = message
-    data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    record_path.parent.mkdir(parents=True, exist_ok=True)
-    record_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+def _write_failed_record(
+    plan: ApplyPlan,
+    message: str,
+    *,
+    files_written: list[str] | None = None,
+    backups: list[str] | None = None,
+) -> None:
+    existing = _read_apply_record(plan.record_path) or {}
+    data = {
+        "apply_id": plan.apply_id,
+        "status": ApplyStatus.FAILED.value,
+        "message": message,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "project_root": str(plan.project_root),
+        "destination_subdir": plan.destination_subdir,
+        "generated_dir": _rel(plan.generated_dir, plan.project_root),
+        "validation": _validation_to_dict(plan.validation),
+        "operations": [op.to_dict() for op in plan.operations],
+        "files_written": files_written or [],
+        "backups": backups or [],
+    }
+    if isinstance(existing.get("created_at"), str):
+        data["created_at"] = existing["created_at"]
+    plan.status = ApplyStatus.FAILED
+    plan.record_path.parent.mkdir(parents=True, exist_ok=True)
+    plan.record_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

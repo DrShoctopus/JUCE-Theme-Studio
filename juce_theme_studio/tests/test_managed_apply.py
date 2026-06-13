@@ -454,6 +454,24 @@ def test_malformed_completed_records_are_ignored_and_conflict_remains_conflict(
     assert layout.kind == ApplyOperationKind.CONFLICT
 
 
+def test_completed_apply_records_clear_invalid_backup_rel(fixture_project: Path) -> None:
+    loaded = _project_with_theme(fixture_project)
+    target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("managed layout\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import completed_apply_records, sha256_file
+
+    operation = _history_operation("Source/ThemeStudio/ThemeLayout.json", sha256_file(target))
+    operation["backup_rel"] = "Source/ThemeStudio/ThemeLayout.json"
+    _write_apply_record(loaded.root, "bad-backup-rel", _completed_record(operation))
+
+    records = completed_apply_records(loaded.root)
+
+    assert records
+    assert records[-1]["operations"][0]["backup_rel"] == ""
+
+
 def test_execute_managed_apply_copies_generated_files_and_records_completion(
     fixture_project: Path,
 ) -> None:
@@ -561,3 +579,81 @@ def test_execute_managed_apply_aborts_when_source_changed_after_preview(
     with pytest.raises(RuntimeError, match="source file changed since preview"):
         execute_managed_apply(plan)
     assert not (fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json").exists()
+
+
+def test_execute_managed_apply_failed_record_preserves_partial_recovery_metadata(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import (
+        ApplyOperationKind,
+        execute_managed_apply,
+        plan_managed_apply,
+        sha256_file,
+    )
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="partial-first")
+    execute_managed_apply(first)
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="partial-second")
+    replace_ops = second.operations[:2]
+    for op in replace_ops:
+        op.kind = ApplyOperationKind.REPLACE
+        op.source_checksum = sha256_file(second.generated_dir / op.source_rel)
+        op.target_checksum = sha256_file(fixture_project / op.target_rel)
+
+    real_copy2 = managed_apply_module.shutil.copy2
+    target_writes: list[Path] = []
+
+    def fail_second_target_copy(src: Path, dst: Path) -> Path:
+        target = Path(dst)
+        if target.is_relative_to(fixture_project / "Source" / "ThemeStudio"):
+            target_writes.append(target)
+            if len(target_writes) == 2:
+                raise OSError("simulated copy failure")
+        return real_copy2(src, dst)
+
+    monkeypatch.setattr(managed_apply_module.shutil, "copy2", fail_second_target_copy)
+
+    with pytest.raises(OSError, match="simulated copy failure"):
+        execute_managed_apply(second)
+
+    record = json.loads(second.record_path.read_text(encoding="utf-8"))
+    backup_rels = [op["backup_rel"] for op in record["operations"] if op["backup_rel"]]
+    assert record["status"] == "failed"
+    assert record["files_written"] == [replace_ops[0].target_rel]
+    assert len(record["backups"]) >= 2
+    assert any(rel.endswith(replace_ops[0].target_rel) for rel in backup_rels)
+    assert any(rel.endswith(replace_ops[1].target_rel) for rel in backup_rels)
+
+
+def test_execute_managed_apply_fails_when_copied_target_checksum_mismatches(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="bad-copy")
+    target_rel = next(op.target_rel for op in plan.operations if op.target_rel.endswith(".json"))
+    real_copy2 = managed_apply_module.shutil.copy2
+
+    def corrupt_managed_copy(src: Path, dst: Path) -> Path:
+        target = Path(dst)
+        if target == fixture_project / target_rel:
+            target.write_text("wrong target content\n", encoding="utf-8")
+            return target
+        return real_copy2(src, dst)
+
+    monkeypatch.setattr(managed_apply_module.shutil, "copy2", corrupt_managed_copy)
+
+    with pytest.raises(RuntimeError, match="checksum"):
+        execute_managed_apply(plan)
+
+    record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "failed"
+    assert target_rel not in record["files_written"]
