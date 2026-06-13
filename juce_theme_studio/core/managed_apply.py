@@ -138,11 +138,8 @@ def _safe_project_subdir(project_root: Path, subdir: str, *, label: str) -> Path
     if not subdir.strip() or rel.is_absolute() or ".." in rel.parts:
         raise ValueError(f"Invalid {label}: {subdir!r}")
     root = project_root.resolve()
-    dest = (root / rel).resolve()
-    try:
-        dest.relative_to(root)
-    except ValueError as exc:
-        raise ValueError(f"Invalid {label}: {subdir!r}") from exc
+    dest = root / rel
+    _reject_symlinked_path_components(root, rel, label=label)
     return dest
 
 
@@ -162,6 +159,16 @@ def _safe_apply_id(apply_id: str) -> str:
 
 def _rel(path: Path, root: Path) -> str:
     return str(path.relative_to(root)).replace("\\", "/")
+
+
+def _reject_symlinked_path_components(root: Path, rel: Path, *, label: str) -> None:
+    current = root
+    for part in rel.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"Invalid {label}: symlink at {_rel(current, root)!r}")
+        if not current.exists():
+            break
 
 
 def _safe_relative_record_path(value: Any) -> str | None:
@@ -560,9 +567,9 @@ def _reject_symlinked_target_components(plan: ApplyPlan, op: ApplyOperation) -> 
 def _verify_plan_preconditions(plan: ApplyPlan) -> None:
     for op in plan.operations:
         source = _operation_source_path(plan, op)
-        if op.kind != ApplyOperationKind.UNCHANGED and not source.is_file():
+        if not source.is_file():
             raise RuntimeError(f"Missing source file for {op.target_rel}: {source}")
-        if op.kind != ApplyOperationKind.UNCHANGED and sha256_file(source) != op.source_checksum:
+        if sha256_file(source) != op.source_checksum:
             raise RuntimeError(f"{op.target_rel} source file changed since preview")
 
         _reject_symlinked_target_components(plan, op)

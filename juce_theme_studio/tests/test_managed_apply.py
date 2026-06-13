@@ -597,6 +597,28 @@ def test_execute_managed_apply_aborts_when_source_changed_after_preview(
     assert not (fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json").exists()
 
 
+def test_execute_managed_apply_aborts_when_unchanged_source_deleted_after_preview(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    seed = plan_managed_apply(loaded.manifest, loaded.root, apply_id="unchanged-source-seed")
+    destination = fixture_project / "Source" / "ThemeStudio"
+    destination.mkdir(parents=True)
+    generated_layout = seed.generated_dir / "ThemeLayout.json"
+    (destination / "ThemeLayout.json").write_bytes(generated_layout.read_bytes())
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="unchanged-source-drift")
+    (plan.generated_dir / "ThemeLayout.json").unlink()
+
+    with pytest.raises(RuntimeError, match="source"):
+        execute_managed_apply(plan)
+    record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "failed"
+
+
 def test_execute_managed_apply_failed_record_preserves_partial_recovery_metadata(
     fixture_project: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -764,3 +786,22 @@ def test_execute_managed_apply_rejects_symlinked_destination_directory(
     assert not (redirected / "ThemeLayout.json").exists()
     assert destination.is_symlink()
     assert record["status"] == "failed"
+
+
+def test_plan_managed_apply_rejects_symlinked_destination_before_planning(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+    source_dir = fixture_project / "Source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    destination = source_dir / "ThemeStudio"
+    redirected = fixture_project / "RedirectedThemeStudio"
+    redirected.mkdir()
+    destination.symlink_to(redirected, target_is_directory=True)
+
+    from juce_theme_studio.core.managed_apply import plan_managed_apply
+
+    with pytest.raises(ValueError, match="symlink"):
+        plan_managed_apply(loaded.manifest, loaded.root, apply_id="symlink-before-plan")
+
+    assert not (redirected / "ThemeLayout.json").exists()
