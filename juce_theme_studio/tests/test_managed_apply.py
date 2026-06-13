@@ -472,6 +472,22 @@ def test_completed_apply_records_clear_invalid_backup_rel(fixture_project: Path)
     assert records[-1]["operations"][0]["backup_rel"] == ""
 
 
+def test_completed_apply_records_ignore_mismatched_apply_id(fixture_project: Path) -> None:
+    loaded = _project_with_theme(fixture_project)
+    target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("managed layout\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import completed_apply_records, sha256_file
+
+    operation = _history_operation("Source/ThemeStudio/ThemeLayout.json", sha256_file(target))
+    record = _completed_record(operation)
+    record["apply_id"] = "../unsafe"
+    _write_apply_record(loaded.root, "trusted-directory", record)
+
+    assert completed_apply_records(loaded.root) == []
+
+
 def test_execute_managed_apply_copies_generated_files_and_records_completion(
     fixture_project: Path,
 ) -> None:
@@ -657,3 +673,42 @@ def test_execute_managed_apply_fails_when_copied_target_checksum_mismatches(
     record = json.loads(plan.record_path.read_text(encoding="utf-8"))
     assert record["status"] == "failed"
     assert target_rel not in record["files_written"]
+    assert target_rel in record["files_touched"]
+
+
+def test_execute_managed_apply_fails_before_overwrite_when_backup_checksum_mismatches(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="backup-first")
+    execute_managed_apply(first)
+    target = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    original = target.read_text(encoding="utf-8")
+
+    loaded.manifest.theme_colors["primary"] = "ff334455"
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="backup-corrupt")
+    real_copy2 = managed_apply_module.shutil.copy2
+
+    def corrupt_backup_copy(src: Path, dst: Path) -> Path:
+        destination = Path(dst)
+        if destination.is_relative_to(second.transaction_dir / "backups"):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text("corrupt backup\n", encoding="utf-8")
+            return destination
+        return real_copy2(src, dst)
+
+    monkeypatch.setattr(managed_apply_module.shutil, "copy2", corrupt_backup_copy)
+
+    with pytest.raises(RuntimeError, match="backup checksum mismatch"):
+        execute_managed_apply(second)
+
+    record = json.loads(second.record_path.read_text(encoding="utf-8"))
+    assert target.read_text(encoding="utf-8") == original
+    assert record["status"] == "failed"
+    assert "backup checksum mismatch" in record["message"]
+    assert "Source/ThemeStudio/ThemeLayout.json" not in record["files_touched"]

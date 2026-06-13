@@ -264,6 +264,15 @@ def _validated_completed_record(
 ) -> dict[str, Any] | None:
     if not isinstance(record, dict) or record.get("status") != ApplyStatus.COMPLETED.value:
         return None
+    trusted_apply_id = None
+    if record_path is not None:
+        try:
+            trusted_apply_id = _safe_apply_id(record_path.parent.name)
+        except ValueError:
+            return None
+        record_apply_id = record.get("apply_id")
+        if record_apply_id is not None and record_apply_id != trusted_apply_id:
+            return None
 
     operations = record.get("operations")
     if not isinstance(operations, list):
@@ -286,6 +295,10 @@ def _validated_completed_record(
         return None
 
     sanitized = dict(record)
+    if trusted_apply_id is not None:
+        sanitized["apply_id"] = trusted_apply_id
+        sanitized["record_path"] = str(record_path)
+        sanitized["transaction_dir"] = str(record_path.parent)
     sanitized["status"] = ApplyStatus.COMPLETED.value
     sanitized["operations"] = valid_operations
     return sanitized
@@ -462,6 +475,7 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
         raise RuntimeError("Cannot apply while conflicts are present")
 
     files_written: list[str] = []
+    files_touched: list[str] = []
     backups: list[str] = []
     completed_ops: list[ApplyOperation] = []
 
@@ -477,22 +491,33 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
 
             source = _operation_source_path(plan, op)
             target = _operation_target_path(plan, op)
+            target_rel = _rel(target, plan.project_root)
             target.parent.mkdir(parents=True, exist_ok=True)
 
             if target.is_file():
-                backup = backup_root / _rel(target, plan.project_root)
+                backup = backup_root / target_rel
                 backup.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(target, backup)
-                op.backup_rel = _rel(backup, plan.project_root)
-                backups.append(op.backup_rel)
+                backup_rel = _rel(backup, plan.project_root)
+                if sha256_file(backup) != op.target_checksum:
+                    raise RuntimeError(f"{op.target_rel} backup checksum mismatch")
+                op.backup_rel = backup_rel
+                backups.append(backup_rel)
 
+            files_touched.append(target_rel)
             shutil.copy2(source, target)
             if sha256_file(target) != op.source_checksum:
                 raise RuntimeError(f"{op.target_rel} copied checksum mismatch")
-            files_written.append(_rel(target, plan.project_root))
+            files_written.append(target_rel)
             completed_ops.append(op)
     except Exception as exc:
-        _write_failed_record(plan, str(exc), files_written=files_written, backups=backups)
+        _write_failed_record(
+            plan,
+            str(exc),
+            files_written=files_written,
+            files_touched=files_touched,
+            backups=backups,
+        )
         raise
 
     plan.status = ApplyStatus.COMPLETED
@@ -557,6 +582,7 @@ def _write_failed_record(
     message: str,
     *,
     files_written: list[str] | None = None,
+    files_touched: list[str] | None = None,
     backups: list[str] | None = None,
 ) -> None:
     existing = _read_apply_record(plan.record_path) or {}
@@ -571,6 +597,7 @@ def _write_failed_record(
         "validation": _validation_to_dict(plan.validation),
         "operations": [op.to_dict() for op in plan.operations],
         "files_written": files_written or [],
+        "files_touched": files_touched or [],
         "backups": backups or [],
     }
     if isinstance(existing.get("created_at"), str):
