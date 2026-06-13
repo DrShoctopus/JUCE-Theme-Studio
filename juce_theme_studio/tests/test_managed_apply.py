@@ -724,6 +724,31 @@ def test_completed_apply_records_ignore_symlinked_transaction_directory(
     assert layout.kind == ApplyOperationKind.CONFLICT
 
 
+def test_latest_completed_apply_remains_discoverable_when_target_becomes_symlink(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import (
+        execute_managed_apply,
+        latest_completed_apply,
+        plan_managed_apply,
+    )
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="target-link-history")
+    execute_managed_apply(plan)
+    target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    redirected = fixture_project.parent / "linked-theme-layout.json"
+    redirected.write_text("outside target\n", encoding="utf-8")
+    target.unlink()
+    target.symlink_to(redirected)
+
+    record = latest_completed_apply(loaded.root)
+
+    assert record is not None
+    assert record["apply_id"] == "target-link-history"
+
+
 def test_execute_managed_apply_copies_generated_files_and_records_completion(
     fixture_project: Path,
 ) -> None:
@@ -748,6 +773,22 @@ def test_execute_managed_apply_copies_generated_files_and_records_completion(
     assert any(
         op["target_rel"] == "Source/ThemeStudio/ThemeLayout.json" for op in record["operations"]
     )
+
+
+def test_execute_managed_apply_preserves_created_at_in_completed_record(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="completed-created-at")
+    planned_record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+
+    execute_managed_apply(plan)
+
+    completed_record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert completed_record["created_at"] == planned_record["created_at"]
 
 
 def test_execute_managed_apply_backs_up_replaced_file(fixture_project: Path) -> None:

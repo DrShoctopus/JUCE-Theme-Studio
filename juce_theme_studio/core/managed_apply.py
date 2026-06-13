@@ -274,13 +274,8 @@ def _safe_relative_record_path(value: Any) -> str | None:
     return str(rel).replace("\\", "/")
 
 
-def _safe_record_target_rel(project_root: Path, value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        return _rel(_safe_project_subdir(project_root, value, label="target"), project_root)
-    except ValueError:
-        return None
+def _safe_record_target_rel(_project_root: Path, value: Any) -> str | None:
+    return _safe_relative_record_path(value)
 
 
 def _safe_record_backup_rel(
@@ -920,6 +915,7 @@ def _verify_plan_preconditions(plan: ApplyPlan) -> None:
 
 
 def _write_completed_record(plan: ApplyPlan) -> None:
+    existing = _read_apply_record(plan.record_path) or {}
     data = {
         "apply_id": plan.apply_id,
         "status": ApplyStatus.COMPLETED.value,
@@ -930,6 +926,8 @@ def _write_completed_record(plan: ApplyPlan) -> None:
         "validation": _validation_to_dict(plan.validation),
         "operations": [op.to_dict() for op in plan.operations],
     }
+    if isinstance(existing.get("created_at"), str):
+        data["created_at"] = existing["created_at"]
     _write_record_data(plan, data)
 
 
