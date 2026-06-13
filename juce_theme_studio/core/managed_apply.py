@@ -128,6 +128,20 @@ def _safe_project_subdir(project_root: Path, subdir: str, *, label: str) -> Path
     return dest
 
 
+def _safe_apply_id(apply_id: str) -> str:
+    rel = Path(apply_id)
+    if (
+        not apply_id.strip()
+        or rel.is_absolute()
+        or apply_id in {".", ".."}
+        or "/" in apply_id
+        or "\\" in apply_id
+        or len(rel.parts) != 1
+    ):
+        raise ValueError(f"Invalid apply_id: {apply_id!r}")
+    return apply_id
+
+
 def _rel(path: Path, root: Path) -> str:
     return str(path.relative_to(root)).replace("\\", "/")
 
@@ -140,8 +154,13 @@ def plan_managed_apply(
     apply_id: str | None = None,
 ) -> ApplyPlan:
     project_root = project_root.resolve()
-    _safe_project_subdir(project_root, destination_subdir, label="destination")
-    tx_id = apply_id or make_apply_id()
+    destination_dir = _safe_project_subdir(
+        project_root,
+        destination_subdir,
+        label="destination",
+    )
+    destination_rel = _rel(destination_dir, project_root)
+    tx_id = _safe_apply_id(apply_id if apply_id is not None else make_apply_id())
     transaction_dir = _applies_dir(project_root) / tx_id
     generated_dir = transaction_dir / "generated"
     return ApplyPlan(
@@ -149,6 +168,6 @@ def plan_managed_apply(
         project_root=project_root,
         transaction_dir=transaction_dir,
         generated_dir=generated_dir,
-        destination_subdir=destination_subdir,
+        destination_subdir=destination_rel,
         validation=validate_manifest(manifest, project_root),
     )
