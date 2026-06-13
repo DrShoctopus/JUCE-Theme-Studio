@@ -712,3 +712,55 @@ def test_execute_managed_apply_fails_before_overwrite_when_backup_checksum_misma
     assert record["status"] == "failed"
     assert "backup checksum mismatch" in record["message"]
     assert "Source/ThemeStudio/ThemeLayout.json" not in record["files_touched"]
+
+
+def test_execute_managed_apply_rejects_symlinked_target_file(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="symlink-file-first")
+    execute_managed_apply(first)
+    target = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    original = target.read_text(encoding="utf-8")
+
+    loaded.manifest.theme_colors["primary"] = "ff445566"
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="symlink-file-second")
+    linked_target = fixture_project / "Source" / "ThemeStudio" / "linked-target.json"
+    linked_target.write_text(original, encoding="utf-8")
+    target.unlink()
+    target.symlink_to(linked_target)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        execute_managed_apply(second)
+
+    record = json.loads(second.record_path.read_text(encoding="utf-8"))
+    assert linked_target.read_text(encoding="utf-8") == original
+    assert target.is_symlink()
+    assert record["status"] == "failed"
+
+
+def test_execute_managed_apply_rejects_symlinked_destination_directory(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="symlink-parent")
+    source_dir = fixture_project / "Source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    destination = source_dir / "ThemeStudio"
+    redirected = fixture_project / "RedirectedThemeStudio"
+    redirected.mkdir()
+    destination.symlink_to(redirected, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        execute_managed_apply(plan)
+
+    record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert not (redirected / "ThemeLayout.json").exists()
+    assert destination.is_symlink()
+    assert record["status"] == "failed"

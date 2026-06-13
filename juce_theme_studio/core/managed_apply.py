@@ -542,6 +542,21 @@ def _operation_target_path(plan: ApplyPlan, op: ApplyOperation) -> Path:
     return _safe_project_subdir(plan.project_root, op.target_rel, label="target")
 
 
+def _reject_symlinked_target_components(plan: ApplyPlan, op: ApplyOperation) -> None:
+    target_rel = _safe_relative_record_path(op.target_rel)
+    if target_rel is None:
+        raise RuntimeError(f"Invalid target path for {op.target_rel}: {op.target_rel}")
+
+    current = plan.project_root.resolve()
+    for part in Path(target_rel).parts:
+        current = current / part
+        if current.is_symlink():
+            symlink_rel = _rel(current, plan.project_root)
+            raise RuntimeError(f"{op.target_rel} changed since preview: symlink at {symlink_rel}")
+        if not current.exists():
+            break
+
+
 def _verify_plan_preconditions(plan: ApplyPlan) -> None:
     for op in plan.operations:
         source = _operation_source_path(plan, op)
@@ -550,6 +565,7 @@ def _verify_plan_preconditions(plan: ApplyPlan) -> None:
         if op.kind != ApplyOperationKind.UNCHANGED and sha256_file(source) != op.source_checksum:
             raise RuntimeError(f"{op.target_rel} source file changed since preview")
 
+        _reject_symlinked_target_components(plan, op)
         target = _operation_target_path(plan, op)
         if not target.exists():
             if op.target_checksum:
