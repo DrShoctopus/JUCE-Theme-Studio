@@ -484,6 +484,39 @@ def _validated_history_record(
     return sanitized
 
 
+def _safe_unresolved_history_record(
+    record: dict[str, Any] | None,
+    *,
+    record_path: Path,
+    allowed_statuses: set[str],
+) -> dict[str, Any] | None:
+    if not isinstance(record, dict):
+        return None
+    status = record.get("status")
+    if status not in allowed_statuses or status not in _UNRESOLVED_REVERT_STATUSES:
+        return None
+    try:
+        trusted_apply_id = _safe_apply_id(record_path.parent.name)
+    except ValueError:
+        return None
+    record_apply_id = record.get("apply_id")
+    if record_apply_id is not None and record_apply_id != trusted_apply_id:
+        return None
+
+    sanitized: dict[str, Any] = {
+        "apply_id": trusted_apply_id,
+        "status": str(status),
+        "record_path": str(record_path),
+        "transaction_dir": str(record_path.parent),
+        "operations": [],
+    }
+    for key in ("created_at", "completed_at", "updated_at", "revert_failed_at"):
+        value = record.get(key)
+        if isinstance(value, str):
+            sanitized[key] = value
+    return sanitized
+
+
 def _validated_completed_record(
     project_root: Path,
     record: dict[str, Any] | None,
@@ -552,12 +585,19 @@ def _history_records_with_statuses(
     for path in sorted(applies.glob("*/apply.json")):
         if not _history_record_path_is_safe(project_root, path):
             continue
+        raw_record = _read_apply_record(path)
         record = _validated_history_record(
             project_root,
-            _read_apply_record(path),
+            raw_record,
             record_path=path,
             allowed_statuses=allowed_statuses,
         )
+        if record is None:
+            record = _safe_unresolved_history_record(
+                raw_record,
+                record_path=path,
+                allowed_statuses=allowed_statuses,
+            )
         if record is None:
             continue
         timestamp = _record_timestamp(record)
@@ -970,7 +1010,9 @@ def revert_last_apply(project_root: Path, *, force: bool = False) -> RevertResul
             if op.kind == ApplyOperationKind.REPLACE:
                 backup = _revert_backup_path(plan, op)
                 target = _revert_target_path(plan, op)
-                files_restored.append(_safe_restore_backup_file(plan, op, backup, target))
+                files_restored.append(
+                    _safe_restore_backup_file(plan, op, backup, target, force=force)
+                )
             elif op.kind == ApplyOperationKind.CREATE:
                 target = _revert_target_path(plan, op)
                 if _safe_remove_created_target(plan, op, target, force=force):
@@ -1057,6 +1099,8 @@ def _safe_restore_backup_file(
     op: ApplyOperation,
     backup: Path,
     target: Path,
+    *,
+    force: bool,
 ) -> str:
     _ensure_safe_project_directory(plan.project_root, target.parent, label="target parent")
     _reject_symlinked_target_components(plan, op)
@@ -1073,6 +1117,9 @@ def _safe_restore_backup_file(
         _reject_symlinked_target_components(plan, op)
         if target.exists() and not target.is_file():
             raise RuntimeError(f"{op.target_rel} changed after apply")
+        if not force:
+            if not target.is_file() or sha256_file(target) != op.source_checksum:
+                raise RuntimeError(f"{op.target_rel} changed after apply")
         temp.replace(target)
         _reject_symlinked_target_components(plan, op)
         if sha256_file(target) != op.target_checksum:

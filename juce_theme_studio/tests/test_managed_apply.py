@@ -1529,6 +1529,62 @@ def test_revert_force_restores_even_when_file_changed_after_apply(
     assert record["revert"]["force"] is True
 
 
+def test_revert_refuses_replace_target_changed_after_preconditions(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import (
+        execute_managed_apply,
+        plan_managed_apply,
+        revert_last_apply,
+    )
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="race-first")
+    execute_managed_apply(first)
+    loaded.manifest.theme_colors["primary"] = "ff2468ac"
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="race-second")
+    execute_managed_apply(second)
+    layout = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+
+    real_copy_verified = managed_apply_module._copy_verified_to_temp
+
+    def change_target_after_revert_preconditions(
+        source: Path,
+        temp: Path,
+        expected_checksum: str,
+        project_root: Path,
+        *,
+        label: str,
+    ) -> None:
+        real_copy_verified(
+            source,
+            temp,
+            expected_checksum,
+            project_root,
+            label=label,
+        )
+        if label == "Source/ThemeStudio/ThemeLayout.json revert temp":
+            layout.write_text("user changed during revert\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        managed_apply_module,
+        "_copy_verified_to_temp",
+        change_target_after_revert_preconditions,
+    )
+
+    with pytest.raises(RuntimeError, match="changed after apply"):
+        revert_last_apply(fixture_project)
+
+    record = json.loads(second.record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "revert_failed"
+    assert record["message"] == "Source/ThemeStudio/ThemeLayout.json changed after apply"
+    assert record["revert"]["files_restored"] == []
+    assert layout.read_text(encoding="utf-8") == "user changed during revert\n"
+
+
 def test_revert_refuses_without_completed_apply(fixture_project: Path) -> None:
     from juce_theme_studio.core.managed_apply import revert_last_apply
 
@@ -1627,10 +1683,12 @@ def test_revert_failure_after_partial_restore_marks_record_failed(
         op: managed_apply_module.ApplyOperation,
         backup: Path,
         target: Path,
+        *,
+        force: bool,
     ) -> str:
         if restored:
             raise RuntimeError("simulated revert restore failure")
-        result = real_restore(plan, op, backup, target)
+        result = real_restore(plan, op, backup, target, force=force)
         restored.append(result)
         return result
 
@@ -1846,3 +1904,122 @@ def test_plan_managed_apply_blocks_when_latest_apply_is_revert_failed(
 
     with pytest.raises(RuntimeError, match="unresolved managed apply revert"):
         plan_managed_apply(loaded.manifest, loaded.root, apply_id="blocked-plan")
+
+
+@pytest.mark.parametrize("backup_state", ["missing", "corrupt"])
+def test_revert_blocks_when_latest_revert_failed_replace_backup_is_invalid(
+    fixture_project: Path,
+    backup_state: str,
+) -> None:
+    from juce_theme_studio.core.managed_apply import revert_last_apply, sha256_file
+
+    older_target = fixture_project / "Source" / "ThemeStudio" / "older-invalid-backup.txt"
+    older_target.parent.mkdir(parents=True)
+    older_target.write_text("older managed file\n", encoding="utf-8")
+    older_operation = {
+        "kind": "create",
+        "source_rel": "generated/older-invalid-backup.txt",
+        "target_rel": "Source/ThemeStudio/older-invalid-backup.txt",
+        "source_checksum": sha256_file(older_target),
+        "target_checksum": "",
+        "backup_rel": "",
+        "message": "older completed apply",
+    }
+    _write_apply_record(
+        fixture_project,
+        f"older-{backup_state}-backup",
+        _completed_record(
+            older_operation,
+            completed_at="2026-06-13T12:00:00+00:00",
+        ),
+    )
+
+    latest_target = fixture_project / "Source" / "ThemeStudio" / "latest-invalid-backup.txt"
+    latest_target.write_text("latest managed file\n", encoding="utf-8")
+    latest_id = f"latest-revert-failed-{backup_state}-backup"
+    latest_operation = _history_replace_operation(
+        fixture_project,
+        latest_id,
+        "Source/ThemeStudio/latest-invalid-backup.txt",
+        sha256_file(latest_target),
+        backup_content="latest previous file\n",
+    )
+    if backup_state == "missing":
+        (fixture_project / latest_operation["backup_rel"]).unlink()
+    else:
+        (fixture_project / latest_operation["backup_rel"]).write_text(
+            "corrupt previous file\n",
+            encoding="utf-8",
+        )
+    latest_record = _completed_record(
+        latest_operation,
+        completed_at="2026-06-13T13:00:00+00:00",
+    )
+    latest_record["status"] = "revert_failed"
+    _write_apply_record(fixture_project, latest_id, latest_record)
+
+    with pytest.raises(RuntimeError, match="unresolved managed apply revert"):
+        revert_last_apply(fixture_project)
+
+    assert older_target.read_text(encoding="utf-8") == "older managed file\n"
+    assert latest_target.read_text(encoding="utf-8") == "latest managed file\n"
+
+
+@pytest.mark.parametrize("backup_state", ["missing", "corrupt"])
+def test_plan_blocks_when_latest_revert_failed_replace_backup_is_invalid(
+    fixture_project: Path,
+    backup_state: str,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+    target = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("older managed layout\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import plan_managed_apply, sha256_file
+
+    older_operation = _history_replace_operation(
+        fixture_project,
+        f"older-plan-{backup_state}-backup",
+        "Source/ThemeStudio/ThemeLayout.json",
+        sha256_file(target),
+    )
+    _write_apply_record(
+        fixture_project,
+        f"older-plan-{backup_state}-backup",
+        _completed_record(
+            older_operation,
+            completed_at="2026-06-13T12:00:00+00:00",
+        ),
+    )
+
+    latest_id = f"latest-plan-revert-failed-{backup_state}-backup"
+    latest_operation = _history_replace_operation(
+        fixture_project,
+        latest_id,
+        "Source/ThemeStudio/latest-plan-invalid-backup.txt",
+        "1" * 64,
+        backup_content="latest previous file\n",
+    )
+    if backup_state == "missing":
+        (fixture_project / latest_operation["backup_rel"]).unlink()
+    else:
+        (fixture_project / latest_operation["backup_rel"]).write_text(
+            "corrupt previous file\n",
+            encoding="utf-8",
+        )
+    latest_record = _completed_record(
+        latest_operation,
+        completed_at="2026-06-13T13:00:00+00:00",
+    )
+    latest_record["status"] = "revert_failed"
+    _write_apply_record(fixture_project, latest_id, latest_record)
+
+    with pytest.raises(RuntimeError, match="unresolved managed apply revert"):
+        plan_managed_apply(loaded.manifest, loaded.root, apply_id="blocked-invalid-backup-plan")
+
+    assert not (
+        fixture_project
+        / ".juce_theme_studio"
+        / "applies"
+        / "blocked-invalid-backup-plan"
+    ).exists()
