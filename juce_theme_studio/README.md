@@ -470,8 +470,8 @@ pip install -e ".[clang]"          # libclang
 - Does **not** auto-commit.
 - Uses relative paths in the manifest where possible.
 - Logs all operations to the GUI and `.juce_theme_studio/logs/studio.log`.
-- Generated C++ is written only to `.juce_theme_studio/exports/`; existing source
-  files are never overwritten.
+- Export writes generated C++ only to `.juce_theme_studio/exports/`; project
+  files are modified only through the managed apply flow.
 - Managed apply writes only inside the selected project root.
 - Managed apply stores transaction records and backups in `.juce_theme_studio/applies/`.
 - Revert works without Git and refuses to overwrite files changed after apply.
