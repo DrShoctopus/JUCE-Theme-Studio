@@ -115,3 +115,16 @@ def test_apply_operation_round_trips_through_dict() -> None:
     )
 
     assert ApplyOperation.from_dict(operation.to_dict()) == operation
+
+
+def test_apply_operation_from_dict_requires_source_checksum() -> None:
+    from juce_theme_studio.core.managed_apply import ApplyOperation
+
+    with pytest.raises(KeyError, match="source_checksum"):
+        ApplyOperation.from_dict(
+            {
+                "kind": "replace",
+                "source_rel": "generated/ThemeAssets.cpp",
+                "target_rel": "Source/ThemeStudio/ThemeAssets.cpp",
+            }
+        )

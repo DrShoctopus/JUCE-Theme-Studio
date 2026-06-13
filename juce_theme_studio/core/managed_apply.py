@@ -67,7 +67,7 @@ class ApplyOperation:
             kind=ApplyOperationKind(str(data["kind"])),
             source_rel=str(data["source_rel"]),
             target_rel=str(data["target_rel"]),
-            source_checksum=str(data.get("source_checksum", "")),
+            source_checksum=str(data["source_checksum"]),
             target_checksum=str(data.get("target_checksum", "")),
             backup_rel=str(data.get("backup_rel", "")),
             message=str(data.get("message", "")),
