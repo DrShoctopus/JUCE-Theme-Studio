@@ -1538,6 +1538,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Apply failed", str(exc))
             self._log_panel.append_log(f"Managed apply planning failed: {exc}")
             logger.exception("Managed apply planning failed")
+            self._refresh_git_status()
             return
 
         preview = ApplyPreviewDialog(plan, self)

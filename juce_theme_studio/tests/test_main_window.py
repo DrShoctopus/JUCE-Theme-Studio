@@ -7,6 +7,7 @@ widget does not define) that unit tests on core modules cannot catch.
 from __future__ import annotations
 
 import copy
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -24,11 +25,21 @@ from juce_theme_studio.core.sprites import SpriteConfig  # noqa: E402
 from juce_theme_studio.core.types import ControlType, SpriteLayout  # noqa: E402
 
 
-def _project_tree(root: Path) -> list[tuple[str, str]]:
+def _project_tree(root: Path) -> list[tuple[str, str, str]]:
+    def signature(path: Path) -> str:
+        if path.is_dir():
+            return ""
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
     return sorted(
         (
             "dir" if path.is_dir() else "file",
             path.relative_to(root).as_posix(),
+            signature(path),
         )
         for path in root.rglob("*")
     )
@@ -232,6 +243,34 @@ def test_apply_failure_refreshes_git_status(
         main_window_module,
         "execute_managed_apply",
         lambda plan: (_ for _ in ()).throw(RuntimeError("apply broke")),
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "critical",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        window,
+        "_refresh_git_status",
+        lambda: refreshes.append(window._project.root),
+    )
+
+    window._apply_to_project()
+
+    assert refreshes == [window._project.root]
+
+
+def test_apply_planning_failure_refreshes_git_status(
+    window,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from juce_theme_studio.gui import main_window as main_window_module
+
+    refreshes: list[Path] = []
+    monkeypatch.setattr(
+        main_window_module,
+        "plan_managed_apply",
+        lambda manifest, root: (_ for _ in ()).throw(RuntimeError("planning broke")),
     )
     monkeypatch.setattr(
         main_window_module.QMessageBox,
