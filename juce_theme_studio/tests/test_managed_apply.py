@@ -148,3 +148,73 @@ def test_apply_operation_from_dict_requires_source_checksum() -> None:
                 "target_rel": "Source/ThemeStudio/ThemeAssets.cpp",
             }
         )
+
+
+def test_plan_managed_apply_stages_generated_files(fixture_project: Path) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import (
+        ApplyOperationKind,
+        plan_managed_apply,
+    )
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="apply-one")
+
+    assert plan.transaction_dir == loaded.root / ".juce_theme_studio" / "applies" / "apply-one"
+    assert (plan.generated_dir / "ThemeLayout.json").is_file()
+    assert (plan.generated_dir / "ThemeAssets.cpp").is_file()
+    assert any(op.target_rel == "Source/ThemeStudio/ThemeLayout.json" for op in plan.operations)
+    assert {op.kind for op in plan.operations} == {ApplyOperationKind.CREATE}
+
+
+def test_plan_flags_existing_unmanaged_destination_as_conflict(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+    dest = fixture_project / "Source" / "ThemeStudio"
+    dest.mkdir(parents=True)
+    (dest / "ThemeLayout.json").write_text("hand edited\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import (
+        ApplyOperationKind,
+        plan_managed_apply,
+    )
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="conflict")
+
+    conflict = next(op for op in plan.operations if op.target_rel.endswith("ThemeLayout.json"))
+    assert conflict.kind == ApplyOperationKind.CONFLICT
+    assert "unexpected content" in conflict.message
+    assert plan.has_conflicts
+
+
+def test_plan_uses_normalized_destination_when_generating_operations(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import plan_managed_apply
+
+    plan = plan_managed_apply(
+        loaded.manifest,
+        loaded.root,
+        destination_subdir=r"Source\ThemeStudio",
+        apply_id="normalized-plan",
+    )
+
+    assert plan.destination_subdir == "Source/ThemeStudio"
+    assert all(op.target_rel.startswith("Source/ThemeStudio/") for op in plan.operations)
+
+
+def test_plan_stages_even_when_manual_export_subdir_is_invalid(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+    loaded.manifest.export_settings.output_subdir = "../outside"
+
+    from juce_theme_studio.core.managed_apply import plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="safe-staging")
+
+    assert (plan.generated_dir / "ThemeLayout.json").is_file()
+    assert not plan.validation.has_blocking_errors
