@@ -26,6 +26,12 @@ MANAGED_OUTPUT_FILES = {
     "GeneratedThemeComponents.h",
     "GeneratedThemeComponents.cpp",
 }
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+_MANAGED_HISTORY_KINDS = {
+    "create",
+    "replace",
+    "unchanged",
+}
 
 
 class ApplyOperationKind(str, Enum):
@@ -149,24 +155,124 @@ def _rel(path: Path, root: Path) -> str:
     return str(path.relative_to(root)).replace("\\", "/")
 
 
+def _safe_relative_record_path(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.replace("\\", "/")
+    rel = Path(normalized)
+    if not value.strip() or rel.is_absolute() or not rel.parts or ".." in rel.parts:
+        return None
+    return str(rel).replace("\\", "/")
+
+
+def _safe_record_target_rel(project_root: Path, value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return _rel(_safe_project_subdir(project_root, value, label="target"), project_root)
+    except ValueError:
+        return None
+
+
+def _is_sha256_checksum(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(ch in _HEX_DIGITS for ch in value)
+
+
+def _record_timestamp(record: dict[str, Any]) -> datetime | None:
+    for key in ("completed_at", "created_at"):
+        value = record.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        try:
+            stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if stamp.tzinfo is None:
+            return stamp.replace(tzinfo=timezone.utc)
+        return stamp.astimezone(timezone.utc)
+    return None
+
+
+def _validated_history_operation(
+    project_root: Path,
+    item: Any,
+) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+
+    kind = str(item.get("kind", ""))
+    if kind not in _MANAGED_HISTORY_KINDS:
+        return None
+
+    source_rel = _safe_relative_record_path(item.get("source_rel"))
+    target_rel = _safe_record_target_rel(project_root, item.get("target_rel"))
+    source_checksum = item.get("source_checksum")
+    if source_rel is None or target_rel is None or not _is_sha256_checksum(source_checksum):
+        return None
+
+    operation = dict(item)
+    operation["kind"] = kind
+    operation["source_rel"] = source_rel
+    operation["target_rel"] = target_rel
+    operation["source_checksum"] = source_checksum.lower()
+    return operation
+
+
+def _validated_completed_record(
+    project_root: Path,
+    record: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(record, dict) or record.get("status") != ApplyStatus.COMPLETED.value:
+        return None
+
+    operations = record.get("operations")
+    if not isinstance(operations, list):
+        return None
+
+    valid_operations = [
+        operation
+        for item in operations
+        if (operation := _validated_history_operation(project_root, item)) is not None
+    ]
+    if not valid_operations:
+        return None
+
+    sanitized = dict(record)
+    sanitized["status"] = ApplyStatus.COMPLETED.value
+    sanitized["operations"] = valid_operations
+    return sanitized
+
+
 def _read_apply_record(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     try:
         with path.open(encoding="utf-8") as handle:
-            return json.load(handle)
+            record = json.load(handle)
     except (OSError, json.JSONDecodeError):
         return None
+    return record if isinstance(record, dict) else None
 
 
 def completed_apply_records(project_root: Path) -> list[dict[str, Any]]:
-    applies = _applies_dir(project_root.resolve())
-    records: list[dict[str, Any]] = []
+    project_root = project_root.resolve()
+    applies = _applies_dir(project_root)
+    records: list[tuple[bool, datetime, str, dict[str, Any]]] = []
     for path in sorted(applies.glob("*/apply.json")):
-        record = _read_apply_record(path)
-        if record and record.get("status") == ApplyStatus.COMPLETED.value:
-            records.append(record)
-    return records
+        record = _validated_completed_record(project_root, _read_apply_record(path))
+        if record is None:
+            continue
+        timestamp = _record_timestamp(record)
+        records.append(
+            (
+                timestamp is not None,
+                timestamp or datetime.min.replace(tzinfo=timezone.utc),
+                str(path),
+                record,
+            )
+        )
+    records.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [record for _, _, _, record in records]
 
 
 def latest_completed_apply(project_root: Path) -> dict[str, Any] | None:
@@ -180,10 +286,9 @@ def _latest_managed_checksums(project_root: Path) -> dict[str, str]:
         return {}
     checksums: dict[str, str] = {}
     for item in latest.get("operations", []):
-        target = str(item.get("target_rel", ""))
-        source_checksum = str(item.get("source_checksum", ""))
-        if target and source_checksum:
-            checksums[target] = source_checksum
+        operation = _validated_history_operation(project_root, item)
+        if operation:
+            checksums[operation["target_rel"]] = operation["source_checksum"]
     return checksums
 
 
@@ -243,6 +348,8 @@ def plan_managed_apply(
     destination = _safe_project_subdir(project_root, destination_subdir, label="destination")
     tx_id = _safe_apply_id(apply_id if apply_id is not None else make_apply_id())
     transaction_dir = _applies_dir(project_root) / tx_id
+    if transaction_dir.exists():
+        raise FileExistsError(f"Apply transaction already exists for apply_id {tx_id!r}")
     generated_dir = transaction_dir / "generated"
     destination_rel = _rel(destination, project_root)
 
