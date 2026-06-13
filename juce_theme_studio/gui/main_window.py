@@ -51,6 +51,11 @@ from juce_theme_studio.core.assets import (
 from juce_theme_studio.core.controls import Control, create_control
 from juce_theme_studio.core.image_ops import make_background_transparent
 from juce_theme_studio.core.manifest import ThemeManifest
+from juce_theme_studio.core.managed_apply import (
+    execute_managed_apply,
+    plan_managed_apply,
+    revert_last_apply,
+)
 from juce_theme_studio.core.project import (
     LoadedProject,
     create_manual_screen,
@@ -67,6 +72,7 @@ from juce_theme_studio.core.validation import validate_manifest
 from juce_theme_studio.git_tools.git import get_status
 from juce_theme_studio.gui.canvas import CanvasScene, CanvasView
 from juce_theme_studio.gui.dialogs.about_dialog import AboutDialog
+from juce_theme_studio.gui.dialogs.apply_preview_dialog import ApplyPreviewDialog
 from juce_theme_studio.gui.dialogs.export_preview_dialog import ExportPreviewDialog
 from juce_theme_studio.gui.dialogs.help_dialog import HelpDialog
 from juce_theme_studio.gui.dialogs.link_asset_dialog import LinkAssetDialog
@@ -161,6 +167,10 @@ class MainWindow(QMainWindow):
             act.triggered.connect(slot)
             tb.addAction(act)
 
+        apply_act = QAction("Apply to Project", self)
+        apply_act.triggered.connect(self._apply_to_project)
+        tb.addAction(apply_act)
+
         self._preview_act = QAction("Preview Mode", self)
         self._preview_act.setCheckable(True)
         self._preview_act.triggered.connect(self._toggle_preview)
@@ -186,6 +196,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction("Save", self._save_project, QKeySequence.StandardKey.Save)
         file_menu.addSeparator()
         file_menu.addAction("Export...", self._export)
+        file_menu.addAction("Apply to Project", self._apply_to_project)
+        file_menu.addAction("Revert Last Apply", self._revert_last_apply)
         file_menu.addSeparator()
         file_menu.addAction("Settings...", self._show_settings)
 
@@ -1489,6 +1501,106 @@ class MainWindow(QMainWindow):
         box.setText(summary)
         box.setDetailedText("\n".join(lines))
         box.exec()
+        self._refresh_git_status()
+
+    def _apply_to_project(self) -> None:
+        if not self._project:
+            QMessageBox.information(self, "No project", "Open a project first.")
+            return
+
+        report = validate_manifest(self._project.manifest, self._project.root)
+        self._log_panel.set_validation(report)
+        if report.has_blocking_errors:
+            QMessageBox.warning(
+                self,
+                "Validation errors",
+                "Fix blocking validation errors before applying to the project.",
+            )
+            return
+
+        status = get_status(self._project.root)
+        if status.has_unrelated_changes:
+            reply = QMessageBox.question(
+                self,
+                "Unrelated repository changes",
+                "This repository has changes outside Theme Studio files.\n\n"
+                "Continue applying to the project?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        try:
+            plan = plan_managed_apply(self._project.manifest, self._project.root)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Apply failed", str(exc))
+            self._log_panel.append_log(f"Managed apply planning failed: {exc}")
+            logger.exception("Managed apply planning failed")
+            return
+
+        preview = ApplyPreviewDialog(plan, self)
+        if preview.exec() != ApplyPreviewDialog.DialogCode.Accepted:
+            return
+
+        try:
+            result = execute_managed_apply(plan)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Apply failed", str(exc))
+            self._log_panel.append_log(f"Managed apply failed: {exc}")
+            logger.exception("Managed apply failed")
+            return
+
+        save_project(self._project)
+        self._set_dirty(False)
+        self._log_panel.append_log(
+            "Managed apply complete. "
+            f"{len(result.files_written)} file(s) written. "
+            f"Transaction: {result.record_path.parent}"
+        )
+        QMessageBox.information(
+            self,
+            "Apply complete",
+            f"Applied {len(result.files_written)} file(s) to the project.\n\n"
+            f"Transaction: {result.record_path.parent}",
+        )
+        self._refresh_git_status()
+
+    def _revert_last_apply(self) -> None:
+        if not self._project:
+            QMessageBox.information(self, "No project", "Open a project first.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Revert last apply",
+            "Revert the most recent managed apply?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            result = revert_last_apply(self._project.root)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Revert failed", str(exc))
+            self._log_panel.append_log(f"Managed apply revert failed: {exc}")
+            logger.exception("Managed apply revert failed")
+            return
+
+        self._log_panel.append_log(
+            "Managed apply reverted. "
+            f"{len(result.files_restored)} file(s) restored, "
+            f"{len(result.files_removed)} file(s) removed. "
+            f"Transaction: {result.record_path.parent}"
+        )
+        QMessageBox.information(
+            self,
+            "Revert complete",
+            f"Restored {len(result.files_restored)} file(s) and "
+            f"removed {len(result.files_removed)} file(s).",
+        )
         self._refresh_git_status()
 
     def _commit(self) -> None:

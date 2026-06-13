@@ -14,6 +14,7 @@ from PIL import Image
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtGui import QAction  # noqa: E402
 from PySide6.QtWidgets import QApplication, QDialog, QPushButton  # noqa: E402
 
 from juce_theme_studio.core.assets import import_asset  # noqa: E402
@@ -159,6 +160,41 @@ def test_export_cancel_does_not_save_or_clear_dirty(
 
     assert calls == []
     assert window._dirty
+
+
+def test_main_window_has_apply_and_revert_actions(window) -> None:
+    action_texts = [action.text() for action in window.findChildren(QAction)]
+
+    assert "Apply to Project" in action_texts
+    assert "Revert Last Apply" in action_texts
+
+
+def test_apply_cancel_does_not_write_project_files(
+    window,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from juce_theme_studio.gui import main_window as main_window_module
+
+    class CancelApplyPreview:
+        DialogCode = QDialog.DialogCode
+
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    calls: list[str] = []
+    monkeypatch.setattr(main_window_module, "ApplyPreviewDialog", CancelApplyPreview)
+    monkeypatch.setattr(
+        main_window_module,
+        "execute_managed_apply",
+        lambda plan: calls.append(plan.apply_id),
+    )
+
+    window._apply_to_project()
+
+    assert calls == []
 
 
 def test_linking_static_asset_clears_previous_sprite_config(window, fixture_project: Path) -> None:
