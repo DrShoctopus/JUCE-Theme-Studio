@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import shutil
 import uuid
 from pathlib import Path
 
@@ -1541,6 +1542,7 @@ class MainWindow(QMainWindow):
 
         preview = ApplyPreviewDialog(plan, self)
         if preview.exec() != ApplyPreviewDialog.DialogCode.Accepted:
+            self._discard_canceled_apply_transaction(plan)
             return
 
         try:
@@ -1549,6 +1551,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Apply failed", str(exc))
             self._log_panel.append_log(f"Managed apply failed: {exc}")
             logger.exception("Managed apply failed")
+            self._refresh_git_status()
             return
 
         save_project(self._project)
@@ -1587,6 +1590,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Revert failed", str(exc))
             self._log_panel.append_log(f"Managed apply revert failed: {exc}")
             logger.exception("Managed apply revert failed")
+            self._refresh_git_status()
             return
 
         self._log_panel.append_log(
@@ -1612,6 +1616,36 @@ class MainWindow(QMainWindow):
     def _refresh_git_status(self) -> None:
         if self._project:
             self._log_panel.set_git_status(get_status(self._project.root))
+
+    def _discard_canceled_apply_transaction(self, plan) -> None:  # noqa: ANN001
+        if not self._project:
+            return
+
+        transaction_dir = plan.transaction_dir
+        applies_dir = self._project.root.resolve() / ".juce_theme_studio" / "applies"
+        if (
+            not transaction_dir.is_absolute()
+            or transaction_dir.parent != applies_dir
+            or transaction_dir.name in {"", ".", ".."}
+        ):
+            logger.warning("Refusing to discard unexpected apply transaction: %s", transaction_dir)
+            return
+
+        if applies_dir.is_symlink() or transaction_dir.is_symlink():
+            logger.warning("Refusing to discard symlinked apply transaction: %s", transaction_dir)
+            return
+
+        if not transaction_dir.exists():
+            return
+
+        if not transaction_dir.is_dir():
+            logger.warning("Refusing to discard non-directory apply transaction: %s", transaction_dir)
+            return
+
+        try:
+            shutil.rmtree(transaction_dir)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to discard canceled apply transaction: %s", transaction_dir)
 
     def _show_theme_colors(self) -> None:
         if not self._project:

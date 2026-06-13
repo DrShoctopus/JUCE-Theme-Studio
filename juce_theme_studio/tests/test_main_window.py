@@ -23,6 +23,17 @@ from juce_theme_studio.core.project import load_project  # noqa: E402
 from juce_theme_studio.core.sprites import SpriteConfig  # noqa: E402
 from juce_theme_studio.core.types import ControlType, SpriteLayout  # noqa: E402
 
+
+def _project_tree(root: Path) -> list[tuple[str, str]]:
+    return sorted(
+        (
+            "dir" if path.is_dir() else "file",
+            path.relative_to(root).as_posix(),
+        )
+        for path in root.rglob("*")
+    )
+
+
 @pytest.fixture
 def window(qapp, fixture_project: Path):
     from juce_theme_studio.gui.main_window import MainWindow
@@ -191,10 +202,84 @@ def test_apply_cancel_does_not_write_project_files(
         "execute_managed_apply",
         lambda plan: calls.append(plan.apply_id),
     )
+    before = _project_tree(window._project.root)
 
     window._apply_to_project()
 
+    after = _project_tree(window._project.root)
+    assert after == before
     assert calls == []
+
+
+def test_apply_failure_refreshes_git_status(
+    window,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from juce_theme_studio.gui import main_window as main_window_module
+
+    class AcceptApplyPreview:
+        DialogCode = QDialog.DialogCode
+
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    refreshes: list[Path] = []
+    monkeypatch.setattr(main_window_module, "ApplyPreviewDialog", AcceptApplyPreview)
+    monkeypatch.setattr(
+        main_window_module,
+        "execute_managed_apply",
+        lambda plan: (_ for _ in ()).throw(RuntimeError("apply broke")),
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "critical",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        window,
+        "_refresh_git_status",
+        lambda: refreshes.append(window._project.root),
+    )
+
+    window._apply_to_project()
+
+    assert refreshes == [window._project.root]
+
+
+def test_revert_failure_refreshes_git_status(
+    window,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from juce_theme_studio.gui import main_window as main_window_module
+
+    refreshes: list[Path] = []
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "question",
+        lambda *args, **kwargs: main_window_module.QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "critical",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "revert_last_apply",
+        lambda root: (_ for _ in ()).throw(RuntimeError("revert broke")),
+    )
+    monkeypatch.setattr(
+        window,
+        "_refresh_git_status",
+        lambda: refreshes.append(window._project.root),
+    )
+
+    window._revert_last_apply()
+
+    assert refreshes == [window._project.root]
 
 
 def test_linking_static_asset_clears_previous_sprite_config(window, fixture_project: Path) -> None:
