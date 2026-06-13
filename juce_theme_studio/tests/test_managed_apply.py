@@ -519,6 +519,38 @@ def test_completed_apply_records_ignore_mismatched_apply_id(fixture_project: Pat
     assert completed_apply_records(loaded.root) == []
 
 
+def test_completed_apply_records_ignore_symlinked_transaction_directory(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+    target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("hand edited\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import (
+        ApplyOperationKind,
+        completed_apply_records,
+        plan_managed_apply,
+        sha256_file,
+    )
+
+    forged = fixture_project.parent / "forged-history"
+    forged.mkdir()
+    operation = _history_operation("Source/ThemeStudio/ThemeLayout.json", sha256_file(target))
+    record = _completed_record(operation)
+    record["apply_id"] = "fake-id"
+    (forged / "apply.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    applies = loaded.root / ".juce_theme_studio" / "applies"
+    (applies / "fake-id").symlink_to(forged, target_is_directory=True)
+
+    assert completed_apply_records(loaded.root) == []
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="symlink-history-plan")
+
+    layout = next(op for op in plan.operations if op.target_rel.endswith("ThemeLayout.json"))
+    assert layout.kind == ApplyOperationKind.CONFLICT
+
+
 def test_execute_managed_apply_copies_generated_files_and_records_completion(
     fixture_project: Path,
 ) -> None:

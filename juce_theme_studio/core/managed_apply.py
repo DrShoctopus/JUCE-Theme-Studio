@@ -413,11 +413,38 @@ def _read_apply_record(path: Path) -> dict[str, Any] | None:
     return record if isinstance(record, dict) else None
 
 
+def _history_record_path_is_safe(project_root: Path, path: Path) -> bool:
+    applies = _applies_dir(project_root)
+    try:
+        rel = path.relative_to(applies)
+    except ValueError:
+        return False
+    if len(rel.parts) != 2 or rel.name != "apply.json":
+        return False
+    try:
+        _reject_symlinked_project_components(
+            project_root,
+            applies,
+            label="apply history directory",
+        )
+        _reject_symlinked_project_components(
+            project_root,
+            path.parent,
+            label="apply transaction directory",
+        )
+        _reject_symlinked_project_components(project_root, path, label="apply record")
+    except RuntimeError:
+        return False
+    return True
+
+
 def completed_apply_records(project_root: Path) -> list[dict[str, Any]]:
     project_root = project_root.resolve()
     applies = _applies_dir(project_root)
     records: list[tuple[bool, datetime, str, dict[str, Any]]] = []
     for path in sorted(applies.glob("*/apply.json")):
+        if not _history_record_path_is_safe(project_root, path):
+            continue
         record = _validated_completed_record(
             project_root,
             _read_apply_record(path),
