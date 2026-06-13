@@ -1432,3 +1432,131 @@ def test_plan_managed_apply_marks_symlinked_target_conflict_without_hashing_it(
     assert layout.kind == ApplyOperationKind.CONFLICT
     assert layout.target_checksum == ""
     assert "symlink" in layout.message
+
+
+def test_revert_last_apply_restores_modified_files_and_removes_created_files(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import (
+        ApplyStatus,
+        execute_managed_apply,
+        plan_managed_apply,
+        revert_last_apply,
+    )
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="revert-first")
+    execute_managed_apply(first)
+    loaded.manifest.theme_colors["primary"] = "ff123456"
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="revert-second")
+    execute_managed_apply(second)
+
+    layout = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    before_revert = layout.read_text(encoding="utf-8")
+    first_applied = (first.generated_dir / "ThemeLayout.json").read_text(encoding="utf-8")
+
+    result = revert_last_apply(fixture_project)
+
+    assert result.apply_id == "revert-second"
+    assert result.files_restored
+    assert "Source/ThemeStudio/ThemeLayout.json" in result.files_restored
+    assert layout.read_text(encoding="utf-8") == first_applied
+    assert layout.read_text(encoding="utf-8") != before_revert
+    second_record = json.loads(result.record_path.read_text(encoding="utf-8"))
+    assert second_record["status"] == ApplyStatus.REVERTED.value
+    assert second_record["revert"]["files_restored"] == result.files_restored
+    assert second_record["revert"]["files_removed"] == result.files_removed
+    assert second_record["revert"]["force"] is False
+    assert "reverted_at" in second_record
+
+    result = revert_last_apply(fixture_project)
+
+    assert result.apply_id == "revert-first"
+    assert result.files_removed
+    assert "Source/ThemeStudio/ThemeLayout.json" in result.files_removed
+    assert not layout.exists()
+
+
+def test_revert_refuses_when_managed_file_changed_after_apply(fixture_project: Path) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import (
+        execute_managed_apply,
+        plan_managed_apply,
+        revert_last_apply,
+    )
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="revert-conflict")
+    execute_managed_apply(plan)
+    layout = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    layout.write_text("user changed after apply\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="changed after apply"):
+        revert_last_apply(fixture_project)
+
+    record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "completed"
+    assert layout.read_text(encoding="utf-8") == "user changed after apply\n"
+
+
+def test_revert_force_restores_even_when_file_changed_after_apply(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import (
+        execute_managed_apply,
+        plan_managed_apply,
+        revert_last_apply,
+    )
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="force-first")
+    execute_managed_apply(first)
+    loaded.manifest.theme_colors["primary"] = "ff654321"
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="force-second")
+    execute_managed_apply(second)
+
+    layout = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    previous = (first.generated_dir / "ThemeLayout.json").read_text(encoding="utf-8")
+    layout.write_text("changed after apply\n", encoding="utf-8")
+
+    result = revert_last_apply(fixture_project, force=True)
+
+    assert result.files_restored
+    assert layout.read_text(encoding="utf-8") == previous
+    record = json.loads(result.record_path.read_text(encoding="utf-8"))
+    assert record["revert"]["force"] is True
+
+
+def test_revert_refuses_without_completed_apply(fixture_project: Path) -> None:
+    from juce_theme_studio.core.managed_apply import revert_last_apply
+
+    with pytest.raises(RuntimeError, match="No completed managed apply"):
+        revert_last_apply(fixture_project)
+
+
+def test_revert_refuses_symlinked_current_target_even_with_force(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import (
+        execute_managed_apply,
+        plan_managed_apply,
+        revert_last_apply,
+    )
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="revert-target-link")
+    execute_managed_apply(plan)
+    target = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    redirected = fixture_project.parent / "revert-linked-layout.json"
+    redirected.write_text("outside target\n", encoding="utf-8")
+    target.unlink()
+    target.symlink_to(redirected)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        revert_last_apply(fixture_project, force=True)
+
+    assert target.is_symlink()
+    assert redirected.read_text(encoding="utf-8") == "outside target\n"

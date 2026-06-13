@@ -111,6 +111,14 @@ class ApplyResult:
     backups: list[str] = field(default_factory=list)
 
 
+@dataclass
+class RevertResult:
+    apply_id: str
+    record_path: Path
+    files_restored: list[str] = field(default_factory=list)
+    files_removed: list[str] = field(default_factory=list)
+
+
 def make_apply_id(now: datetime | None = None) -> str:
     stamp = now or datetime.now(timezone.utc)
     return stamp.strftime("%Y%m%d_%H%M%S_%f")
@@ -859,6 +867,178 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
         files_written=files_written,
         backups=backups,
     )
+
+
+def revert_last_apply(project_root: Path, *, force: bool = False) -> RevertResult:
+    project_root = project_root.resolve()
+    record = latest_completed_apply(project_root)
+    if record is None:
+        raise RuntimeError("No completed managed apply to revert")
+
+    apply_id = _safe_apply_id(str(record["apply_id"]))
+    transaction_dir = _applies_dir(project_root) / apply_id
+    record_path = transaction_dir / "apply.json"
+    if not _history_record_path_is_safe(project_root, record_path):
+        raise RuntimeError(f"Unsafe apply record: {record_path}")
+
+    plan = ApplyPlan(
+        apply_id=apply_id,
+        project_root=project_root,
+        transaction_dir=transaction_dir,
+        generated_dir=transaction_dir / "generated",
+        destination_subdir=str(record.get("destination_subdir", DEFAULT_DESTINATION_SUBDIR)),
+        operations=[ApplyOperation.from_dict(item) for item in record["operations"]],
+        status=ApplyStatus.COMPLETED,
+    )
+    _ensure_safe_transaction_file_path(
+        plan,
+        plan.record_path,
+        label="apply record",
+        create_parent=False,
+    )
+
+    _verify_revert_preconditions(plan, force=force)
+
+    files_restored: list[str] = []
+    files_removed: list[str] = []
+    for op in reversed(plan.operations):
+        if op.kind == ApplyOperationKind.REPLACE:
+            backup = _revert_backup_path(plan, op)
+            target = _revert_target_path(plan, op)
+            files_restored.append(_safe_restore_backup_file(plan, op, backup, target))
+        elif op.kind == ApplyOperationKind.CREATE:
+            target = _revert_target_path(plan, op)
+            if _safe_remove_created_target(plan, op, target, force=force):
+                files_removed.append(op.target_rel)
+
+    _write_reverted_record(
+        plan,
+        files_restored=files_restored,
+        files_removed=files_removed,
+        force=force,
+    )
+    return RevertResult(
+        apply_id=apply_id,
+        record_path=record_path,
+        files_restored=files_restored,
+        files_removed=files_removed,
+    )
+
+
+def _verify_revert_preconditions(plan: ApplyPlan, *, force: bool) -> None:
+    for op in plan.operations:
+        target = _revert_target_path(plan, op)
+        _reject_symlinked_target_components(plan, op)
+        if target.exists() and not target.is_file():
+            raise RuntimeError(f"{op.target_rel} changed after apply")
+
+        current_checksum = sha256_file(target) if target.is_file() else ""
+        if not force and current_checksum != op.source_checksum:
+            raise RuntimeError(f"{op.target_rel} changed after apply")
+
+        if op.kind == ApplyOperationKind.REPLACE:
+            _revert_backup_path(plan, op)
+
+
+def _revert_target_path(plan: ApplyPlan, op: ApplyOperation) -> Path:
+    try:
+        return _operation_target_path(plan, op)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _revert_backup_path(plan: ApplyPlan, op: ApplyOperation) -> Path:
+    if not op.backup_rel:
+        raise RuntimeError(f"Missing backup for {op.target_rel}")
+    if not op.target_checksum:
+        raise RuntimeError(f"Missing backup checksum for {op.target_rel}")
+
+    backup_root = plan.transaction_dir / "backups"
+    _reject_symlinked_project_components(plan.project_root, backup_root, label="backup directory")
+    try:
+        backup = _safe_project_subdir(plan.project_root, op.backup_rel, label="backup")
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    try:
+        backup.relative_to(backup_root)
+    except ValueError as exc:
+        raise RuntimeError(f"Unsafe backup: outside transaction: {op.backup_rel}") from exc
+    _reject_symlinked_project_components(plan.project_root, backup, label="backup")
+    if not backup.is_file() or backup.is_symlink():
+        raise RuntimeError(f"Missing backup for {op.target_rel}: {op.backup_rel}")
+    if sha256_file(backup) != op.target_checksum:
+        raise RuntimeError(f"{op.target_rel} backup checksum mismatch")
+    return backup
+
+
+def _safe_restore_backup_file(
+    plan: ApplyPlan,
+    op: ApplyOperation,
+    backup: Path,
+    target: Path,
+) -> str:
+    _ensure_safe_project_directory(plan.project_root, target.parent, label="target parent")
+    _reject_symlinked_target_components(plan, op)
+    temp = _temp_sibling(target)
+    try:
+        _reject_symlinked_project_components(plan.project_root, temp, label="target temp")
+        _copy_verified_to_temp(
+            backup,
+            temp,
+            op.target_checksum,
+            plan.project_root,
+            label=f"{op.target_rel} revert temp",
+        )
+        _reject_symlinked_target_components(plan, op)
+        if target.exists() and not target.is_file():
+            raise RuntimeError(f"{op.target_rel} changed after apply")
+        temp.replace(target)
+        _reject_symlinked_target_components(plan, op)
+        if sha256_file(target) != op.target_checksum:
+            raise RuntimeError(f"{op.target_rel} restore checksum mismatch")
+        return op.target_rel
+    except Exception:
+        _cleanup_temp_file(temp)
+        raise
+
+
+def _safe_remove_created_target(
+    plan: ApplyPlan,
+    op: ApplyOperation,
+    target: Path,
+    *,
+    force: bool,
+) -> bool:
+    _reject_symlinked_target_components(plan, op)
+    if not target.exists():
+        return False
+    if not target.is_file():
+        raise RuntimeError(f"{op.target_rel} changed after apply")
+    if not force and sha256_file(target) != op.source_checksum:
+        raise RuntimeError(f"{op.target_rel} changed after apply")
+    target.unlink()
+    return True
+
+
+def _write_reverted_record(
+    plan: ApplyPlan,
+    *,
+    files_restored: list[str],
+    files_removed: list[str],
+    force: bool,
+) -> None:
+    existing = _read_apply_record(plan.record_path)
+    if existing is None:
+        raise RuntimeError(f"Cannot read apply record for {plan.apply_id}")
+    existing["status"] = ApplyStatus.REVERTED.value
+    existing["reverted_at"] = datetime.now(timezone.utc).isoformat()
+    existing["revert"] = {
+        "files_restored": files_restored,
+        "files_removed": files_removed,
+        "force": force,
+    }
+    plan.status = ApplyStatus.REVERTED
+    _write_record_data(plan, existing)
 
 
 def _operation_source_path(plan: ApplyPlan, op: ApplyOperation) -> Path:
