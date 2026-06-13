@@ -140,3 +140,51 @@ def test_generated_cpp_screen_layout_identifiers_are_valid_and_unique(
     assert "struct Main_PageLayout" in header
     assert "struct Main_Page_2Layout" in header
     assert "struct 123_MainLayout" not in header
+
+
+def test_export_can_write_to_explicit_staging_directory(fixture_project: Path) -> None:
+    _, manifest, _ = _project_with_knob(fixture_project)
+    staging = fixture_project / ".juce_theme_studio" / "applies" / "preview" / "generated"
+
+    from juce_theme_studio.juce.exporter import export_theme_to_directory
+
+    result = export_theme_to_directory(manifest, fixture_project, staging)
+
+    assert result.export_dir == staging
+    assert (staging / "ThemeLayout.json").is_file()
+    assert (staging / "ThemeAssets.cpp").is_file()
+    assert (staging / "GeneratedThemeComponents.h").is_file()
+    assert (staging / "assets").is_dir()
+    assert any(path.endswith("ThemeLayout.json") for path in result.files_written)
+    assert result.backup_dir is None
+
+
+def test_explicit_staging_directory_ignores_manual_output_subdir(
+    fixture_project: Path,
+) -> None:
+    _, manifest, _ = _project_with_knob(fixture_project)
+    manifest.export_settings.output_subdir = "../outside"
+    staging = fixture_project / ".juce_theme_studio" / "applies" / "safe" / "generated"
+
+    from juce_theme_studio.juce.exporter import export_theme_to_directory
+
+    result = export_theme_to_directory(manifest, fixture_project, staging)
+
+    assert result.validation is not None
+    assert not result.validation.has_blocking_errors
+    assert result.export_dir == staging
+    assert result.backup_dir is None
+    assert (staging / "ThemeLayout.json").is_file()
+    assert manifest.export_settings.output_subdir == "../outside"
+
+
+def test_explicit_staging_directory_must_stay_inside_project_root(
+    fixture_project: Path,
+    tmp_path: Path,
+) -> None:
+    _, manifest, _ = _project_with_knob(fixture_project)
+
+    from juce_theme_studio.juce.exporter import export_theme_to_directory
+
+    with pytest.raises(ValueError, match="export directory"):
+        export_theme_to_directory(manifest, fixture_project, tmp_path / "outside")

@@ -28,8 +28,9 @@ _SECTIONS: list[tuple[str, str]] = [
 
 <h3>What is JUCE Theme Studio?</h3>
 <p>JUCE Theme Studio is a standalone visual editor for designing, previewing, and exporting
-themes for JUCE audio plugins and applications. It works non-destructively alongside your
-existing JUCE project — your original source files are never modified.</p>
+themes for JUCE audio plugins and applications. Scanning and export work non-destructively
+alongside your existing JUCE project; <b>Apply to Project</b> is the explicit managed write
+path with preview, transaction backups, and revert support.</p>
 
 <h3>Opening a Project</h3>
 <ol>
@@ -282,6 +283,14 @@ position your existing components via <code>applyScreenLayout()</code>.</p>
   <li>Previous exports are automatically backed up to
       <code>.juce_theme_studio/backups/</code>.</li>
 </ol>
+
+<h3>Managed Apply</h3>
+<p><b>Apply to Project</b> copies generated runtime files into
+<code>Source/ThemeStudio/</code> and records a reversible transaction under
+<code>.juce_theme_studio/applies/</code>.</p>
+<p>The preview lists creates, replacements, unchanged files, and conflicts before
+anything in the project is modified. Use <b>Revert Last Apply</b> to restore the
+latest completed transaction.</p>
 
 <h3>Generated Files</h3>
 <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse">

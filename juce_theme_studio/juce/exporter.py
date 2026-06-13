@@ -8,6 +8,7 @@ screen straight from ``ThemeLayout.json``.
 
 from __future__ import annotations
 
+import copy
 import json
 import keyword
 import re
@@ -160,6 +161,43 @@ def preview_export_files(manifest: ThemeManifest, project_root: Path) -> list[st
     return files
 
 
+def export_theme_to_directory(
+    manifest: ThemeManifest,
+    project_root: Path,
+    export_dir: Path,
+    *,
+    force: bool = False,
+) -> ExportResult:
+    """Write generated theme files to an explicit directory without backup."""
+    project_root = project_root.resolve()
+    export_dir = export_dir.resolve()
+    try:
+        export_dir.relative_to(project_root)
+    except ValueError as exc:
+        raise ValueError(f"Invalid export directory: {export_dir}") from exc
+
+    validation = _validate_manifest_for_explicit_export(manifest, project_root)
+    if validation.has_blocking_errors and not force:
+        return ExportResult(export_dir=export_dir, validation=validation)
+
+    export_dir.mkdir(parents=True, exist_ok=True)
+    assets_out = export_dir / "assets"
+    assets_out.mkdir(exist_ok=True)
+
+    result = ExportResult(export_dir=export_dir, validation=validation)
+    _write_export_payload(manifest, project_root, export_dir, assets_out, result)
+    return result
+
+
+def _validate_manifest_for_explicit_export(
+    manifest: ThemeManifest,
+    project_root: Path,
+) -> ValidationReport:
+    validation_manifest = copy.deepcopy(manifest)
+    validation_manifest.export_settings.output_subdir = "exports"
+    return validate_manifest(validation_manifest, project_root)
+
+
 def export_theme(
     manifest: ThemeManifest,
     project_root: Path,
@@ -184,6 +222,17 @@ def export_theme(
     assets_out.mkdir(exist_ok=True)
 
     result = ExportResult(export_dir=export_dir, validation=validation, backup_dir=backup_dir)
+    _write_export_payload(manifest, project_root, export_dir, assets_out, result)
+    return result
+
+
+def _write_export_payload(
+    manifest: ThemeManifest,
+    project_root: Path,
+    export_dir: Path,
+    assets_out: Path,
+    result: ExportResult,
+) -> None:
     settings = manifest.export_settings
     ns = settings.namespace
 
@@ -214,8 +263,6 @@ def export_theme(
         for filename, content in cpp_files.items():
             path = export_dir / filename
             _write_cpp(path, content, project_root, result)
-
-    return result
 
 
 def _create_backup(studio_dir: Path, export_dir: Path) -> Path | None:

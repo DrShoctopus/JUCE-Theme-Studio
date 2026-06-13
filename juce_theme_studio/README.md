@@ -84,7 +84,9 @@ python -m juce_theme_studio.app.main
 4. Detected `juce::Component` screens appear in the **Screens** list.
    Use **New Screen** for manual layouts.
 
-Your original source files and assets are **never** modified.
+Scanning and export do not modify your original source files or assets. Use
+**Apply to Project** when you want Theme Studio to write managed generated files
+into `Source/ThemeStudio/` with preview, transaction backups, and revert support.
 
 When you reopen a project, saved control positions and sizes are restored from
 `theme_project.json`. Controls can be dragged and resized unless they are
@@ -347,6 +349,20 @@ Values are embedded in `ThemeLayout.json` and applied at runtime by
 Check the **Validation** tab in the Log Panel before exporting. Blocking errors prevent
 export; warnings can be bypassed with confirmation.
 
+### Managed Apply
+
+**Apply to Project** copies the generated runtime theme files into
+`Source/ThemeStudio/` and records a transaction under
+`.juce_theme_studio/applies/`.
+
+Before writing project files, the Apply Preview shows every create, replace,
+unchanged file, or conflict. Conflicts block apply until the destination file is
+removed, restored, or manually reconciled.
+
+Use **Revert Last Apply** to restore files from the latest completed apply. The
+revert works without Git by using transaction backups and checksums. If a managed
+file changed after apply, revert stops instead of overwriting it.
+
 ---
 
 ## Live JUCE Preview
@@ -456,8 +472,11 @@ pip install -e ".[clang]"          # libclang
 - Does **not** auto-commit.
 - Uses relative paths in the manifest where possible.
 - Logs all operations to the GUI and `.juce_theme_studio/logs/studio.log`.
-- Generated C++ is written only to `.juce_theme_studio/exports/`; existing source
-  files are never overwritten.
+- Export writes generated C++ only to `.juce_theme_studio/exports/`; project
+  files are modified only through the managed apply flow.
+- Managed apply writes only inside the selected project root.
+- Managed apply stores transaction records and backups in `.juce_theme_studio/applies/`.
+- Revert works without Git and refuses to overwrite files changed after apply.
 
 ---
 

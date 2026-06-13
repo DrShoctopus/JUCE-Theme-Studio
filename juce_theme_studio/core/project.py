@@ -30,7 +30,7 @@ class LoadedProject:
 def ensure_studio_dirs(project_root: Path) -> Path:
     """Create .juce_theme_studio/ subfolders if missing."""
     studio = project_root / STUDIO_DIR
-    for sub in ("screens", "assets", "exports", "backups", "logs"):
+    for sub in ("screens", "assets", "exports", "backups", "logs", "applies"):
         (studio / sub).mkdir(parents=True, exist_ok=True)
     return studio
 
