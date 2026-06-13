@@ -46,7 +46,9 @@ class ApplyStatus(str, Enum):
     PLANNED = "planned"
     COMPLETED = "completed"
     FAILED = "failed"
+    REVERTING = "reverting"
     REVERTED = "reverted"
+    REVERT_FAILED = "revert_failed"
 
 
 @dataclass
@@ -874,8 +876,9 @@ def revert_last_apply(project_root: Path, *, force: bool = False) -> RevertResul
     record = latest_completed_apply(project_root)
     if record is None:
         raise RuntimeError("No completed managed apply to revert")
+    selected_record = _revert_record_base(record)
 
-    apply_id = _safe_apply_id(str(record["apply_id"]))
+    apply_id = _safe_apply_id(str(selected_record["apply_id"]))
     transaction_dir = _applies_dir(project_root) / apply_id
     record_path = transaction_dir / "apply.json"
     if not _history_record_path_is_safe(project_root, record_path):
@@ -886,8 +889,8 @@ def revert_last_apply(project_root: Path, *, force: bool = False) -> RevertResul
         project_root=project_root,
         transaction_dir=transaction_dir,
         generated_dir=transaction_dir / "generated",
-        destination_subdir=str(record.get("destination_subdir", DEFAULT_DESTINATION_SUBDIR)),
-        operations=[ApplyOperation.from_dict(item) for item in record["operations"]],
+        destination_subdir=str(selected_record.get("destination_subdir", DEFAULT_DESTINATION_SUBDIR)),
+        operations=[ApplyOperation.from_dict(item) for item in selected_record["operations"]],
         status=ApplyStatus.COMPLETED,
     )
     _ensure_safe_transaction_file_path(
@@ -898,25 +901,44 @@ def revert_last_apply(project_root: Path, *, force: bool = False) -> RevertResul
     )
 
     _verify_revert_preconditions(plan, force=force)
+    started_at = datetime.now(timezone.utc).isoformat()
+    _write_reverting_record(plan, selected_record, force=force, started_at=started_at)
 
     files_restored: list[str] = []
     files_removed: list[str] = []
-    for op in reversed(plan.operations):
-        if op.kind == ApplyOperationKind.REPLACE:
-            backup = _revert_backup_path(plan, op)
-            target = _revert_target_path(plan, op)
-            files_restored.append(_safe_restore_backup_file(plan, op, backup, target))
-        elif op.kind == ApplyOperationKind.CREATE:
-            target = _revert_target_path(plan, op)
-            if _safe_remove_created_target(plan, op, target, force=force):
-                files_removed.append(op.target_rel)
+    try:
+        for op in reversed(plan.operations):
+            if op.kind == ApplyOperationKind.REPLACE:
+                backup = _revert_backup_path(plan, op)
+                target = _revert_target_path(plan, op)
+                files_restored.append(_safe_restore_backup_file(plan, op, backup, target))
+            elif op.kind == ApplyOperationKind.CREATE:
+                target = _revert_target_path(plan, op)
+                if _safe_remove_created_target(plan, op, target, force=force):
+                    files_removed.append(op.target_rel)
 
-    _write_reverted_record(
-        plan,
-        files_restored=files_restored,
-        files_removed=files_removed,
-        force=force,
-    )
+        _write_reverted_record(
+            plan,
+            selected_record,
+            files_restored=files_restored,
+            files_removed=files_removed,
+            force=force,
+            started_at=started_at,
+        )
+    except Exception as exc:
+        try:
+            _write_revert_failed_record(
+                plan,
+                selected_record,
+                str(exc),
+                files_restored=files_restored,
+                files_removed=files_removed,
+                force=force,
+                started_at=started_at,
+            )
+        except Exception:
+            pass
+        raise
     return RevertResult(
         apply_id=apply_id,
         record_path=record_path,
@@ -1020,25 +1042,115 @@ def _safe_remove_created_target(
     return True
 
 
-def _write_reverted_record(
+def _revert_record_base(record: dict[str, Any]) -> dict[str, Any]:
+    data = {
+        key: value
+        for key, value in record.items()
+        if key not in {"record_path", "transaction_dir"}
+    }
+    data["operations"] = [dict(item) for item in record["operations"]]
+    return data
+
+
+def _revert_metadata(
     plan: ApplyPlan,
     *,
     files_restored: list[str],
     files_removed: list[str],
     force: bool,
-) -> None:
-    existing = _read_apply_record(plan.record_path)
-    if existing is None:
-        raise RuntimeError(f"Cannot read apply record for {plan.apply_id}")
-    existing["status"] = ApplyStatus.REVERTED.value
-    existing["reverted_at"] = datetime.now(timezone.utc).isoformat()
-    existing["revert"] = {
+    started_at: str,
+    updated_at: str,
+) -> dict[str, Any]:
+    return {
         "files_restored": files_restored,
         "files_removed": files_removed,
         "force": force,
+        "started_at": started_at,
+        "updated_at": updated_at,
+        "intended_files_restored": [
+            op.target_rel for op in plan.operations if op.kind == ApplyOperationKind.REPLACE
+        ],
+        "intended_files_removed": [
+            op.target_rel for op in plan.operations if op.kind == ApplyOperationKind.CREATE
+        ],
     }
+
+
+def _write_reverting_record(
+    plan: ApplyPlan,
+    record: dict[str, Any],
+    *,
+    force: bool,
+    started_at: str,
+) -> None:
+    updated_at = datetime.now(timezone.utc).isoformat()
+    data = _revert_record_base(record)
+    data["status"] = ApplyStatus.REVERTING.value
+    data["updated_at"] = updated_at
+    data["revert"] = _revert_metadata(
+        plan,
+        files_restored=[],
+        files_removed=[],
+        force=force,
+        started_at=started_at,
+        updated_at=updated_at,
+    )
+    plan.status = ApplyStatus.REVERTING
+    _write_record_data(plan, data)
+
+
+def _write_reverted_record(
+    plan: ApplyPlan,
+    record: dict[str, Any],
+    *,
+    files_restored: list[str],
+    files_removed: list[str],
+    force: bool,
+    started_at: str,
+) -> None:
+    reverted_at = datetime.now(timezone.utc).isoformat()
+    existing = _revert_record_base(record)
+    existing["status"] = ApplyStatus.REVERTED.value
+    existing["reverted_at"] = reverted_at
+    existing["updated_at"] = reverted_at
+    existing["revert"] = _revert_metadata(
+        plan,
+        files_restored=files_restored,
+        files_removed=files_removed,
+        force=force,
+        started_at=started_at,
+        updated_at=reverted_at,
+    )
     plan.status = ApplyStatus.REVERTED
     _write_record_data(plan, existing)
+
+
+def _write_revert_failed_record(
+    plan: ApplyPlan,
+    record: dict[str, Any],
+    message: str,
+    *,
+    files_restored: list[str],
+    files_removed: list[str],
+    force: bool,
+    started_at: str,
+) -> None:
+    failed_at = datetime.now(timezone.utc).isoformat()
+    data = _revert_record_base(record)
+    data["status"] = ApplyStatus.REVERT_FAILED.value
+    data["message"] = message
+    data["updated_at"] = failed_at
+    data["revert_failed_at"] = failed_at
+    data["revert"] = _revert_metadata(
+        plan,
+        files_restored=files_restored,
+        files_removed=files_removed,
+        force=force,
+        started_at=started_at,
+        updated_at=failed_at,
+    )
+    plan.status = ApplyStatus.REVERT_FAILED
+    _write_record_data(plan, data)
 
 
 def _operation_source_path(plan: ApplyPlan, op: ApplyOperation) -> Path:

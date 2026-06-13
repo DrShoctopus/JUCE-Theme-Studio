@@ -1560,3 +1560,158 @@ def test_revert_refuses_symlinked_current_target_even_with_force(
 
     assert target.is_symlink()
     assert redirected.read_text(encoding="utf-8") == "outside target\n"
+
+
+def test_revert_failure_after_partial_restore_marks_record_failed(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import ApplyStatus, revert_last_apply, sha256_file
+
+    apply_id = "revert-partial-failure"
+    first = fixture_project / "Source" / "ThemeStudio" / "first.txt"
+    second = fixture_project / "Source" / "ThemeStudio" / "second.txt"
+    first.parent.mkdir(parents=True)
+    first.write_text("first applied\n", encoding="utf-8")
+    second.write_text("second applied\n", encoding="utf-8")
+    first_backup_rel, first_target_checksum = _write_history_backup(
+        fixture_project,
+        apply_id,
+        "Source/ThemeStudio/first.txt",
+        "first previous\n",
+    )
+    second_backup_rel, second_target_checksum = _write_history_backup(
+        fixture_project,
+        apply_id,
+        "Source/ThemeStudio/second.txt",
+        "second previous\n",
+    )
+    operations = [
+        {
+            "kind": "replace",
+            "source_rel": "generated/first.txt",
+            "target_rel": "Source/ThemeStudio/first.txt",
+            "source_checksum": sha256_file(first),
+            "target_checksum": first_target_checksum,
+            "backup_rel": first_backup_rel,
+            "message": "replace first",
+        },
+        {
+            "kind": "replace",
+            "source_rel": "generated/second.txt",
+            "target_rel": "Source/ThemeStudio/second.txt",
+            "source_checksum": sha256_file(second),
+            "target_checksum": second_target_checksum,
+            "backup_rel": second_backup_rel,
+            "message": "replace second",
+        },
+    ]
+    record_path = _write_apply_record(
+        fixture_project,
+        apply_id,
+        {
+            "apply_id": apply_id,
+            "status": "completed",
+            "created_at": "2026-06-13T11:59:00+00:00",
+            "completed_at": "2026-06-13T12:00:00+00:00",
+            "operations": operations,
+        },
+    )
+
+    real_restore = managed_apply_module._safe_restore_backup_file
+    restored: list[str] = []
+
+    def fail_after_first_restore(
+        plan: managed_apply_module.ApplyPlan,
+        op: managed_apply_module.ApplyOperation,
+        backup: Path,
+        target: Path,
+    ) -> str:
+        if restored:
+            raise RuntimeError("simulated revert restore failure")
+        result = real_restore(plan, op, backup, target)
+        restored.append(result)
+        return result
+
+    monkeypatch.setattr(
+        managed_apply_module,
+        "_safe_restore_backup_file",
+        fail_after_first_restore,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated revert restore failure"):
+        revert_last_apply(fixture_project)
+
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["status"] == ApplyStatus.REVERT_FAILED.value
+    assert record["message"] == "simulated revert restore failure"
+    assert record["revert"]["files_restored"] == ["Source/ThemeStudio/second.txt"]
+    assert record["revert"]["files_removed"] == []
+    assert record["revert"]["force"] is False
+    assert "revert_failed_at" in record
+    assert "updated_at" in record
+    assert first.read_text(encoding="utf-8") == "first applied\n"
+    assert second.read_text(encoding="utf-8") == "second previous\n"
+
+
+def test_revert_writes_sanitized_selected_record_when_raw_record_changes(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import revert_last_apply, sha256_file
+
+    apply_id = "revert-sanitized-record"
+    target_rel = "Source/ThemeStudio/created.txt"
+    target = fixture_project / target_rel
+    target.parent.mkdir(parents=True)
+    target.write_text("created managed file\n", encoding="utf-8")
+    operation = {
+        "kind": "create",
+        "source_rel": "generated/created.txt",
+        "target_rel": target_rel,
+        "source_checksum": sha256_file(target),
+        "target_checksum": "",
+        "backup_rel": "",
+        "message": "create managed file",
+    }
+    record_path = _write_apply_record(
+        fixture_project,
+        apply_id,
+        {
+            "apply_id": apply_id,
+            "status": "completed",
+            "created_at": "2026-06-13T11:59:00+00:00",
+            "completed_at": "2026-06-13T12:00:00+00:00",
+            "operations": [operation],
+        },
+    )
+
+    real_read = managed_apply_module._read_apply_record
+    read_count = 0
+
+    def poison_second_record_read(path: Path) -> dict[str, object] | None:
+        nonlocal read_count
+        result = real_read(path)
+        if Path(path) == record_path:
+            read_count += 1
+            if read_count > 1:
+                return {
+                    "apply_id": "poisoned",
+                    "status": "completed",
+                    "operations": [],
+                    "poisoned": True,
+                }
+        return result
+
+    monkeypatch.setattr(managed_apply_module, "_read_apply_record", poison_second_record_read)
+
+    result = revert_last_apply(fixture_project)
+
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert result.apply_id == apply_id
+    assert record["apply_id"] == apply_id
+    assert record["operations"] == [operation]
+    assert "poisoned" not in record
+    assert record["status"] == "reverted"
