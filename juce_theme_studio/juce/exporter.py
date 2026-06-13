@@ -8,6 +8,7 @@ screen straight from ``ThemeLayout.json``.
 
 from __future__ import annotations
 
+import copy
 import json
 import keyword
 import re
@@ -175,7 +176,7 @@ def export_theme_to_directory(
     except ValueError as exc:
         raise ValueError(f"Invalid export directory: {export_dir}") from exc
 
-    validation = validate_manifest(manifest, project_root)
+    validation = _validate_manifest_for_explicit_export(manifest, project_root)
     if validation.has_blocking_errors and not force:
         return ExportResult(export_dir=export_dir, validation=validation)
 
@@ -186,6 +187,15 @@ def export_theme_to_directory(
     result = ExportResult(export_dir=export_dir, validation=validation)
     _write_export_payload(manifest, project_root, export_dir, assets_out, result)
     return result
+
+
+def _validate_manifest_for_explicit_export(
+    manifest: ThemeManifest,
+    project_root: Path,
+) -> ValidationReport:
+    validation_manifest = copy.deepcopy(manifest)
+    validation_manifest.export_settings.output_subdir = "exports"
+    return validate_manifest(validation_manifest, project_root)
 
 
 def export_theme(

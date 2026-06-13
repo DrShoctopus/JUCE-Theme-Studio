@@ -156,6 +156,26 @@ def test_export_can_write_to_explicit_staging_directory(fixture_project: Path) -
     assert (staging / "GeneratedThemeComponents.h").is_file()
     assert (staging / "assets").is_dir()
     assert any(path.endswith("ThemeLayout.json") for path in result.files_written)
+    assert result.backup_dir is None
+
+
+def test_explicit_staging_directory_ignores_manual_output_subdir(
+    fixture_project: Path,
+) -> None:
+    _, manifest, _ = _project_with_knob(fixture_project)
+    manifest.export_settings.output_subdir = "../outside"
+    staging = fixture_project / ".juce_theme_studio" / "applies" / "safe" / "generated"
+
+    from juce_theme_studio.juce.exporter import export_theme_to_directory
+
+    result = export_theme_to_directory(manifest, fixture_project, staging)
+
+    assert result.validation is not None
+    assert not result.validation.has_blocking_errors
+    assert result.export_dir == staging
+    assert result.backup_dir is None
+    assert (staging / "ThemeLayout.json").is_file()
+    assert manifest.export_settings.output_subdir == "../outside"
 
 
 def test_explicit_staging_directory_must_stay_inside_project_root(
