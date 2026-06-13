@@ -16,3 +16,12 @@ def fixture_project(tmp_path: Path) -> Path:
     dest = tmp_path / "mock_project"
     shutil.copytree(FIXTURE_PROJECT, dest)
     return dest
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    yield app

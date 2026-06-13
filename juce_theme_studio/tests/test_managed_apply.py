@@ -520,6 +520,20 @@ def test_malformed_completed_records_are_ignored_and_conflict_remains_conflict(
     assert layout.kind == ApplyOperationKind.CONFLICT
 
 
+def test_apply_preview_dialog_shows_operations(qapp, fixture_project: Path) -> None:
+    pytest.importorskip("PySide6")
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import plan_managed_apply
+    from juce_theme_studio.gui.dialogs.apply_preview_dialog import ApplyPreviewDialog
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="dialog")
+    dialog = ApplyPreviewDialog(plan)
+
+    assert dialog.windowTitle() == "Apply Preview"
+    assert dialog.operation_count() == len(plan.operations)
+
+
 def test_partially_invalid_completed_record_is_ignored(fixture_project: Path) -> None:
     loaded = _project_with_theme(fixture_project)
     target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"

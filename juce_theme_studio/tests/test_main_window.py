@@ -22,13 +22,6 @@ from juce_theme_studio.core.project import load_project  # noqa: E402
 from juce_theme_studio.core.sprites import SpriteConfig  # noqa: E402
 from juce_theme_studio.core.types import ControlType, SpriteLayout  # noqa: E402
 
-
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
 @pytest.fixture
 def window(qapp, fixture_project: Path):
     from juce_theme_studio.gui.main_window import MainWindow
