@@ -452,3 +452,112 @@ def test_malformed_completed_records_are_ignored_and_conflict_remains_conflict(
 
     layout = next(op for op in plan.operations if op.target_rel.endswith("ThemeLayout.json"))
     assert layout.kind == ApplyOperationKind.CONFLICT
+
+
+def test_execute_managed_apply_copies_generated_files_and_records_completion(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import (
+        ApplyStatus,
+        execute_managed_apply,
+        plan_managed_apply,
+    )
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="apply-copy")
+    result = execute_managed_apply(plan)
+
+    layout = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    assets = fixture_project / "Source" / "ThemeStudio" / "assets"
+    record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert result.status == ApplyStatus.COMPLETED
+    assert layout.is_file()
+    assert assets.is_dir()
+    assert record["status"] == "completed"
+    assert any(
+        op["target_rel"] == "Source/ThemeStudio/ThemeLayout.json" for op in record["operations"]
+    )
+
+
+def test_execute_managed_apply_backs_up_replaced_file(fixture_project: Path) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="first")
+    execute_managed_apply(first)
+    target = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    original = target.read_text(encoding="utf-8")
+
+    loaded.manifest.theme_colors["primary"] = "ffff0000"
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="second")
+    execute_managed_apply(second)
+
+    backups = list((second.transaction_dir / "backups").rglob("ThemeLayout.json"))
+    assert backups
+    assert backups[0].read_text(encoding="utf-8") == original
+
+
+def test_execute_managed_apply_aborts_when_target_changed_after_preview(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="first-change")
+    execute_managed_apply(first)
+    loaded.manifest.theme_colors["primary"] = "ff00ff00"
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="second-change")
+    target = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.write_text("changed after preview\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="changed since preview"):
+        execute_managed_apply(second)
+
+
+def test_execute_managed_apply_refuses_conflicted_plan(fixture_project: Path) -> None:
+    loaded = _project_with_theme(fixture_project)
+    dest = fixture_project / "Source" / "ThemeStudio"
+    dest.mkdir(parents=True)
+    (dest / "ThemeLayout.json").write_text("hand edited\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="conflict-exec")
+
+    with pytest.raises(RuntimeError, match="conflicts"):
+        execute_managed_apply(plan)
+    record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "failed"
+
+
+def test_execute_managed_apply_does_not_copy_missing_source_file(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="missing-source")
+    (plan.generated_dir / "ThemeLayout.json").unlink()
+
+    with pytest.raises(RuntimeError, match="source"):
+        execute_managed_apply(plan)
+    assert not (fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json").exists()
+
+
+def test_execute_managed_apply_aborts_when_source_changed_after_preview(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="changed-source")
+    (plan.generated_dir / "ThemeLayout.json").write_text("changed source\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="source file changed since preview"):
+        execute_managed_apply(plan)
+    assert not (fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json").exists()

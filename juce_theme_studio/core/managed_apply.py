@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -100,6 +101,14 @@ class ApplyPlan:
     @property
     def record_path(self) -> Path:
         return self.transaction_dir / "apply.json"
+
+
+@dataclass
+class ApplyResult:
+    status: ApplyStatus
+    record_path: Path
+    files_written: list[str] = field(default_factory=list)
+    backups: list[str] = field(default_factory=list)
 
 
 def make_apply_id(now: datetime | None = None) -> str:
@@ -402,3 +411,106 @@ def plan_managed_apply(
     )
     _write_plan_record(plan)
     return plan
+
+
+def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
+    if plan.has_conflicts:
+        _mark_record_status(plan.record_path, ApplyStatus.FAILED, "Plan contains conflicts")
+        raise RuntimeError("Cannot apply while conflicts are present")
+
+    files_written: list[str] = []
+    backups: list[str] = []
+    completed_ops: list[ApplyOperation] = []
+
+    try:
+        _verify_plan_preconditions(plan)
+        backup_root = plan.transaction_dir / "backups"
+        backup_root.mkdir(parents=True, exist_ok=True)
+
+        for op in plan.operations:
+            if op.kind == ApplyOperationKind.UNCHANGED:
+                completed_ops.append(op)
+                continue
+
+            source = _operation_source_path(plan, op)
+            target = _operation_target_path(plan, op)
+            target.parent.mkdir(parents=True, exist_ok=True)
+
+            if target.is_file():
+                backup = backup_root / _rel(target, plan.project_root)
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(target, backup)
+                op.backup_rel = _rel(backup, plan.project_root)
+                backups.append(op.backup_rel)
+
+            shutil.copy2(source, target)
+            files_written.append(_rel(target, plan.project_root))
+            completed_ops.append(op)
+    except Exception as exc:
+        _mark_record_status(plan.record_path, ApplyStatus.FAILED, str(exc))
+        raise
+
+    plan.status = ApplyStatus.COMPLETED
+    plan.operations = completed_ops
+    _write_completed_record(plan)
+    return ApplyResult(
+        status=ApplyStatus.COMPLETED,
+        record_path=plan.record_path,
+        files_written=files_written,
+        backups=backups,
+    )
+
+
+def _operation_source_path(plan: ApplyPlan, op: ApplyOperation) -> Path:
+    source_rel = _safe_relative_record_path(op.source_rel)
+    if source_rel is None:
+        raise RuntimeError(f"Invalid source path for {op.target_rel}: {op.source_rel}")
+    return plan.generated_dir / source_rel
+
+
+def _operation_target_path(plan: ApplyPlan, op: ApplyOperation) -> Path:
+    return _safe_project_subdir(plan.project_root, op.target_rel, label="target")
+
+
+def _verify_plan_preconditions(plan: ApplyPlan) -> None:
+    for op in plan.operations:
+        source = _operation_source_path(plan, op)
+        if op.kind != ApplyOperationKind.UNCHANGED and not source.is_file():
+            raise RuntimeError(f"Missing source file for {op.target_rel}: {source}")
+        if op.kind != ApplyOperationKind.UNCHANGED and sha256_file(source) != op.source_checksum:
+            raise RuntimeError(f"{op.target_rel} source file changed since preview")
+
+        target = _operation_target_path(plan, op)
+        if not target.exists():
+            if op.target_checksum:
+                raise RuntimeError(f"{op.target_rel} changed since preview")
+            continue
+        if not target.is_file():
+            raise RuntimeError(f"{op.target_rel} changed since preview")
+
+        current = sha256_file(target)
+        if current != op.target_checksum:
+            raise RuntimeError(f"{op.target_rel} changed since preview")
+
+
+def _write_completed_record(plan: ApplyPlan) -> None:
+    data = {
+        "apply_id": plan.apply_id,
+        "status": ApplyStatus.COMPLETED.value,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "project_root": str(plan.project_root),
+        "destination_subdir": plan.destination_subdir,
+        "generated_dir": _rel(plan.generated_dir, plan.project_root),
+        "validation": _validation_to_dict(plan.validation),
+        "operations": [op.to_dict() for op in plan.operations],
+    }
+    plan.record_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _mark_record_status(record_path: Path, status: ApplyStatus, message: str) -> None:
+    data = _read_apply_record(record_path) or {}
+    data["status"] = status.value
+    data["message"] = message
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
