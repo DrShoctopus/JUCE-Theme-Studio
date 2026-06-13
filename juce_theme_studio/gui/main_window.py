@@ -1027,8 +1027,7 @@ class MainWindow(QMainWindow):
         self._properties.set_control(control)
         if not self._restoring_selection:
             self._props_baseline = copy.deepcopy(control) if control else None
-        if control:
-            self._layers.select_control(control.id)
+        self._layers.select_control(control.id if control else None)
 
     def _on_properties_changed(self) -> None:
         # Live edits update only the selected item in place; rebuilding the whole
@@ -1231,8 +1230,7 @@ class MainWindow(QMainWindow):
 
         def do():
             control.asset_id = asset.id
-            if use_sprite:
-                control.sprite_config = sprite_config
+            control.sprite_config = sprite_config if use_sprite else None
             self._scene.refresh_all()
             self._scene.select_control(control.id)
             self._properties.set_control(control)
@@ -1445,8 +1443,6 @@ class MainWindow(QMainWindow):
     def _export(self) -> None:
         if not self._project:
             return
-        save_project(self._project)
-        self._set_dirty(False)
         report = validate_manifest(self._project.manifest, self._project.root)
         self._log_panel.set_validation(report)
 
@@ -1470,6 +1466,9 @@ class MainWindow(QMainWindow):
             result = export_theme(self._project.manifest, self._project.root, force=True)
         else:
             result = export_theme(self._project.manifest, self._project.root)
+
+        save_project(self._project)
+        self._set_dirty(False)
 
         lines = [f"Exported to: {result.export_dir}"]
         for f in result.files_written:

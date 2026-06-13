@@ -1,6 +1,7 @@
 # PyInstaller spec for a standalone macOS .app bundle.
 # Run from juce_theme_studio/: pyinstaller packaging/macos_app.spec --noconfirm
 
+import importlib.util
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -22,6 +23,8 @@ for package in (
     "gitdb",
     "smmap",
 ):
+    if importlib.util.find_spec(package) is None:
+        continue
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
     datas += pkg_datas
     binaries += pkg_binaries

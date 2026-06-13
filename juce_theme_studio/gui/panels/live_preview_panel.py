@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -38,7 +39,12 @@ class LivePreviewPanel(QWidget):
         self._binary.setPlaceholderText("Path to JuceLivePreview binary (optional)")
         browse = QPushButton("Browse…")
         browse.clicked.connect(self._browse_binary)
-        form.addRow("JUCE binary", self._binary)
+        binary_row = QWidget()
+        binary_layout = QHBoxLayout(binary_row)
+        binary_layout.setContentsMargins(0, 0, 0, 0)
+        binary_layout.addWidget(self._binary)
+        binary_layout.addWidget(browse)
+        form.addRow("JUCE binary", binary_row)
 
         self._status = QLabel("Disabled")
         self._status.setWordWrap(True)

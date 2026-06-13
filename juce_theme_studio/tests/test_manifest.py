@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from juce_theme_studio.core.controls import Control, create_control
 from juce_theme_studio.core.manifest import Screen, ThemeManifest
@@ -38,6 +41,25 @@ def test_manifest_roundtrip(tmp_path: Path) -> None:
     assert loaded.screens[0].controls[0].name == "Gain"
     assert loaded.screens[0].controls[0].sprite_config is not None
     assert loaded.screens[0].controls[0].sprite_config.frame_count == 8
+
+
+def test_manifest_save_preserves_existing_file_when_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "theme_project.json"
+    path.write_text('{"old": true}\n', encoding="utf-8")
+    manifest = ThemeManifest()
+
+    def fail_dump(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(json, "dump", fail_dump)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        manifest.save(path)
+
+    assert path.read_text(encoding="utf-8") == '{"old": true}\n'
 
 
 def test_control_serialization() -> None:

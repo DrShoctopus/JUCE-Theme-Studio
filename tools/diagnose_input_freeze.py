@@ -1,10 +1,8 @@
 """Instrumented launcher to catch the 'sprites + zoom bar go dead' freeze.
 
-Run it exactly like the app, but pointed at this file:
+Run it from the repository root with the same virtualenv used by the app:
 
-    PYTHONPATH=/Users/shoctopus/Documents/GitHub/juce_theme_studio \
-      /Users/shoctopus/Documents/GitHub/juce_theme_studio/juce_theme_studio/.venv/bin/python \
-      /Users/shoctopus/Documents/GitHub/juce_theme_studio/diagnose_input_freeze.py
+    PYTHONPATH=. juce_theme_studio/.venv/bin/python tools/diagnose_input_freeze.py
 
 Then reproduce your steps: open project, import sprite sheet, link sprite to a
 control, go full screen, resize the sprite, click off it, then try to click
@@ -30,7 +28,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject
 from PySide6.QtWidgets import QApplication, QWidget
 
 LOG = Path("/tmp/jts_freeze.log")

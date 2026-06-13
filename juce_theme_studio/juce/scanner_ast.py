@@ -99,7 +99,9 @@ def _analyze_treesitter(path: Path, root: Path, text: str) -> DetectedScreen | N
         ntype = node.type
         snippet = _node_text(text, node)
 
-        if ntype == "class_specifier" and "juce::Component" in snippet:
+        if ntype == "class_specifier" and (
+            "juce::Component" in snippet or "juce::AudioProcessorEditor" in snippet
+        ):
             m = re.search(r"class\s+(\w+)", snippet)
             if m:
                 class_name = m.group(1)
@@ -164,7 +166,12 @@ def _analyze_libclang(path: Path, root: Path, text: str) -> DetectedScreen | Non
             for child in cursor.get_children():
                 if child.kind == clang.CursorKind.CXX_BASE_SPECIFIER:
                     base = child.type.spelling
-                    if "juce::Component" in base or "Component" in base:
+                    if (
+                        "juce::Component" in base
+                        or "Component" in base
+                        or "juce::AudioProcessorEditor" in base
+                        or "AudioProcessorEditor" in base
+                    ):
                         class_name = spell
         if cursor.kind == clang.CursorKind.FIELD_DECL:
             ctype = cursor.type.spelling

@@ -45,3 +45,29 @@ def test_sync_skips_duplicates() -> None:
     )
     assert sync_scan_mappings([screen], scan) == 0
     assert len(screen.controls) == 1
+
+
+def test_sync_counts_backfilled_parameter_ids() -> None:
+    from juce_theme_studio.core.controls import create_control
+    from juce_theme_studio.core.types import ControlType
+
+    screen = Screen(id="s1", name="Main", juce_component="MainComponent")
+    existing = create_control(ControlType.KNOB, "gainSlider", 0, 0, 64, 64)
+    existing.mapping.cpp_variable = "gainSlider"
+    screen.controls.append(existing)
+    scan = ScanResult(
+        project_root=".",
+        screens=[
+            DetectedScreen(
+                id="d1",
+                name="Main",
+                class_name="MainComponent",
+                source_file="x.cpp",
+                controls=[DetectedControl("gainSlider", "juce::Slider", 1)],
+            )
+        ],
+        attachments={"gainSlider": "gain"},
+    )
+
+    assert sync_scan_mappings([screen], scan) == 1
+    assert existing.mapping.parameter_id == "gain"

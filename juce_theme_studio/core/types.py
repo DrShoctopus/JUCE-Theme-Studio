@@ -15,7 +15,6 @@ class ControlType(str, Enum):
     GAIN_REDUCTION_METER = "gain_reduction_meter"
     SLIDER = "slider"
     LED = "led"
-    SCREEN = "screen"
     BACKGROUND = "background"
     STATIC_IMAGE = "static_image"
     LABEL = "label"

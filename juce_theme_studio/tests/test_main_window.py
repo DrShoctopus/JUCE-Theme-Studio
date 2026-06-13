@@ -10,14 +10,17 @@ import copy
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QPushButton  # noqa: E402
 
+from juce_theme_studio.core.assets import import_asset  # noqa: E402
 from juce_theme_studio.core.controls import create_control  # noqa: E402
 from juce_theme_studio.core.project import load_project  # noqa: E402
-from juce_theme_studio.core.types import ControlType  # noqa: E402
+from juce_theme_studio.core.sprites import SpriteConfig  # noqa: E402
+from juce_theme_studio.core.types import ControlType, SpriteLayout  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -133,3 +136,142 @@ def test_screen_list_click_loads_scene_once(window) -> None:
     assert calls == [other_id, other_id], "same-row click must still reload"
 
     window.hide()
+
+
+def test_export_cancel_does_not_save_or_clear_dirty(
+    window, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from juce_theme_studio.gui import main_window as main_window_module
+
+    calls: list[Path] = []
+
+    class CancelPreview:
+        DialogCode = QDialog.DialogCode
+
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(main_window_module, "ExportPreviewDialog", CancelPreview)
+    monkeypatch.setattr(
+        main_window_module,
+        "save_project",
+        lambda loaded: calls.append(loaded.root),
+    )
+    window._set_dirty(True)
+
+    window._export()
+
+    assert calls == []
+    assert window._dirty
+
+
+def test_linking_static_asset_clears_previous_sprite_config(window, fixture_project: Path) -> None:
+    screen = window._current_screen()
+    sprite = import_asset(
+        window._project.manifest,
+        fixture_project,
+        fixture_project / "Resources" / "knob_strip.png",
+        is_sprite_sheet=True,
+    )
+    static = import_asset(
+        window._project.manifest,
+        fixture_project,
+        fixture_project / "Resources" / "background.png",
+    )
+    control = create_control(
+        ControlType.KNOB,
+        "Gain",
+        10,
+        10,
+        64,
+        64,
+        sprite.id,
+        SpriteConfig(frame_count=8),
+    )
+    screen.controls.append(control)
+    window._scene.load_screen(screen)
+
+    window._link_asset_to_control(control, static, is_sprite=False)
+
+    assert control.asset_id == static.id
+    assert control.sprite_config is None
+
+
+def test_live_preview_browse_button_is_visible(qapp) -> None:
+    from juce_theme_studio.gui.panels.live_preview_panel import LivePreviewPanel
+    from juce_theme_studio.juce.preview_bridge import LivePreviewBridge
+
+    panel = LivePreviewPanel(LivePreviewBridge())
+
+    assert any(button.text().startswith("Browse") for button in panel.findChildren(QPushButton))
+
+
+def test_layer_up_moves_control_toward_front(qapp) -> None:
+    from juce_theme_studio.core.manifest import Screen
+    from juce_theme_studio.gui.panels.layers_panel import LayersPanel
+
+    back = create_control(ControlType.KNOB, "Back", 0, 0, 64, 64)
+    mid = create_control(ControlType.KNOB, "Middle", 0, 0, 64, 64)
+    front = create_control(ControlType.KNOB, "Front", 0, 0, 64, 64)
+    back.z_index, mid.z_index, front.z_index = 0, 1, 2
+    screen = Screen(id="s1", name="Main", controls=[back, mid, front])
+    panel = LayersPanel()
+    panel.set_screen(screen)
+    panel.select_control(mid.id)
+
+    panel._move_layer(-1)
+
+    assert mid.z_index == 2
+    assert front.z_index == 1
+
+
+def test_properties_panel_resets_sprite_fields_for_static_control(qapp) -> None:
+    from juce_theme_studio.gui.panels.properties_panel import PropertiesPanel
+
+    panel = PropertiesPanel()
+    sprite_control = create_control(
+        ControlType.KNOB,
+        "Sprite",
+        0,
+        0,
+        64,
+        64,
+        sprite_config=SpriteConfig(frame_count=8, frame_width=32, frame_height=32),
+    )
+    static_control = create_control(ControlType.STATIC_IMAGE, "Static", 0, 0, 64, 64)
+
+    panel.set_control(sprite_control)
+    panel.set_control(static_control)
+
+    assert panel._frame_count.value() == 1
+    assert not panel._frame_count.isEnabled()
+    assert not panel._sprite_layout.isEnabled()
+
+
+def test_clearing_canvas_selection_clears_layers_selection(window) -> None:
+    control = create_control(ControlType.KNOB, "K", 0, 0, 64, 64)
+    window._push_add_control(control)
+    assert window._layers._tree.selectedItems()
+
+    window._scene.clearSelection()
+    QApplication.processEvents()
+
+    assert not window._layers._tree.selectedItems()
+
+
+def test_sprite_import_dialog_uses_ceil_rows_for_partial_grid(qapp, tmp_path: Path) -> None:
+    from juce_theme_studio.gui.dialogs.sprite_import_dialog import SpriteImportDialog
+
+    path = tmp_path / "grid.png"
+    Image.new("RGBA", (300, 200), (0, 0, 0, 0)).save(path)
+    dialog = SpriteImportDialog(path)
+    dialog._layout.setCurrentIndex(dialog._layout.findData(SpriteLayout.GRID))
+    dialog._frame_count.setValue(5)
+    dialog._columns.setValue(3)
+
+    cfg = dialog.sprite_config()
+
+    assert cfg.rows == 2

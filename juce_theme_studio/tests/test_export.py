@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from juce_theme_studio.core.assets import import_asset
 from juce_theme_studio.core.controls import create_control
-from juce_theme_studio.core.manifest import Screen
+from juce_theme_studio.core.manifest import Screen, ThemeManifest
 from juce_theme_studio.core.project import load_project, save_project
 from juce_theme_studio.core.sprites import SpriteConfig
 from juce_theme_studio.core.types import ControlType
@@ -95,3 +97,46 @@ def test_generated_cpp_is_functional_not_stub(fixture_project: Path) -> None:
     combined = assets_cpp + laf_cpp + comp_cpp
     assert "// Draw sprite" not in combined
     assert "juce::ignoreUnused" not in combined
+
+
+def test_export_rejects_output_subdir_escape_even_when_forced(fixture_project: Path) -> None:
+    manifest = ThemeManifest(screens=[Screen(id="s1", name="Main")])
+    manifest.export_settings.output_subdir = "../outside"
+
+    with pytest.raises(ValueError, match="output subdir"):
+        export_theme(manifest, fixture_project, force=True)
+
+    assert not (fixture_project / "outside" / "ThemeLayout.json").exists()
+
+
+def test_repeated_export_creates_unique_backups(fixture_project: Path) -> None:
+    manifest = ThemeManifest(screens=[Screen(id="s1", name="Main")])
+    first = export_theme(manifest, fixture_project)
+    (first.export_dir / "marker.txt").write_text("old", encoding="utf-8")
+
+    second = export_theme(manifest, fixture_project)
+    third = export_theme(manifest, fixture_project)
+
+    assert second.backup_dir is not None
+    assert third.backup_dir is not None
+    assert second.backup_dir != third.backup_dir
+
+
+def test_generated_cpp_screen_layout_identifiers_are_valid_and_unique(
+    fixture_project: Path,
+) -> None:
+    manifest = ThemeManifest(
+        screens=[
+            Screen(id="a1", name="123 Main"),
+            Screen(id="b2", name="Main-Page"),
+            Screen(id="c3", name="Main Page"),
+        ]
+    )
+
+    result = export_theme(manifest, fixture_project)
+    header = (result.export_dir / "GeneratedThemeComponents.h").read_text()
+
+    assert "struct Screen_123_MainLayout" in header
+    assert "struct Main_PageLayout" in header
+    assert "struct Main_Page_2Layout" in header
+    assert "struct 123_MainLayout" not in header

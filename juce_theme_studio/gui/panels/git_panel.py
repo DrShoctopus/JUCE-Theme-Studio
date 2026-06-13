@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -52,6 +53,7 @@ class GitCommitDialog(QDialog):
             layout.addWidget(warn)
 
         self._file_list = QListWidget()
+        self._file_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         studio_prefix = ".juce_theme_studio"
         candidates = sorted(
             set(self._status.changed_files + self._status.untracked_files)
@@ -59,6 +61,7 @@ class GitCommitDialog(QDialog):
         theme_files = [f for f in candidates if f.startswith(studio_prefix)]
         for f in theme_files:
             self._file_list.addItem(f)
+            self._file_list.item(self._file_list.count() - 1).setSelected(True)
         layout.addWidget(QLabel("Files to stage:"))
         layout.addWidget(self._file_list)
 
@@ -107,7 +110,7 @@ class GitCommitDialog(QDialog):
         if not self._confirm.isChecked():
             QMessageBox.warning(self, "Confirm", "Please check the confirmation box to commit.")
             return
-        files = [self._file_list.item(i).text() for i in range(self._file_list.count())]
+        files = [item.text() for item in self._file_list.selectedItems()]
         if not files:
             QMessageBox.warning(self, "No files", "No theme files to commit.")
             return

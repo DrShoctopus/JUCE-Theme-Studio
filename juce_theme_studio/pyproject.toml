@@ -46,10 +46,10 @@ full = [
 juce-theme-studio = "juce_theme_studio.app.main:main"
 
 [tool.setuptools]
-package-dir = { "juce_theme_studio" = "." }
+package-dir = { "" = ".." }
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = [".."]
 include = ["juce_theme_studio*"]
 
 [tool.pytest.ini_options]

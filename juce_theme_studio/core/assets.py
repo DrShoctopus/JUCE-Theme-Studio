@@ -24,6 +24,10 @@ def relative_asset_path(filename: str) -> str:
     return f"assets/{filename}"
 
 
+def _asset_library_root(project_root: Path) -> Path:
+    return studio_assets_dir(project_root).resolve()
+
+
 def import_asset(
     manifest: ThemeManifest,
     project_root: Path,
@@ -73,11 +77,25 @@ def import_asset(
 
 
 def resolve_asset_path(project_root: Path, entry: AssetEntry) -> Path:
-    return project_root / STUDIO_DIR / entry.relative_path
+    rel = Path(entry.relative_path)
+    if rel.is_absolute():
+        raise ValueError(f"Asset path points outside the asset library: {entry.relative_path}")
+
+    path = (project_root / STUDIO_DIR / rel).resolve()
+    try:
+        path.relative_to(_asset_library_root(project_root))
+    except ValueError as exc:
+        raise ValueError(
+            f"Asset path points outside the asset library: {entry.relative_path}"
+        ) from exc
+    return path
 
 
 def asset_exists(project_root: Path, entry: AssetEntry) -> bool:
-    return resolve_asset_path(project_root, entry).is_file()
+    try:
+        return resolve_asset_path(project_root, entry).is_file()
+    except ValueError:
+        return False
 
 
 def _normalize_source_path(project_root: Path, source: str | Path) -> str:

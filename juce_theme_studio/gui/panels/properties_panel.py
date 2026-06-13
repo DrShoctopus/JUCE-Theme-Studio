@@ -229,6 +229,7 @@ class PropertiesPanel(QWidget):
 
         sc = control.sprite_config
         if sc:
+            self._set_sprite_widgets_enabled(True)
             idx = self._sprite_layout.findData(sc.layout.value)
             self._sprite_layout.setCurrentIndex(max(0, idx))
             self._frame_count.setValue(sc.frame_count)
@@ -241,7 +242,40 @@ class PropertiesPanel(QWidget):
             self._active_frame.setValue(sc.active_frame if sc.active_frame is not None else -1)
             dis = sc.disabled_frame if sc.disabled_frame is not None else -1
             self._disabled_frame.setValue(dis)
+        else:
+            self._reset_sprite_fields()
+            self._set_sprite_widgets_enabled(False)
         self._block = False
+
+    def _sprite_widgets(self) -> tuple[QWidget, ...]:
+        return (
+            self._sprite_layout,
+            self._frame_count,
+            self._frame_w,
+            self._frame_h,
+            self._start_angle,
+            self._end_angle,
+            self._default_frame,
+            self._hover_frame,
+            self._active_frame,
+            self._disabled_frame,
+        )
+
+    def _set_sprite_widgets_enabled(self, enabled: bool) -> None:
+        for widget in self._sprite_widgets():
+            widget.setEnabled(enabled)
+
+    def _reset_sprite_fields(self) -> None:
+        self._sprite_layout.setCurrentIndex(0)
+        self._frame_count.setValue(1)
+        self._frame_w.setValue(64)
+        self._frame_h.setValue(64)
+        self._start_angle.setValue(-135.0)
+        self._end_angle.setValue(135.0)
+        self._default_frame.setValue(0)
+        self._hover_frame.setValue(-1)
+        self._active_frame.setValue(-1)
+        self._disabled_frame.setValue(-1)
 
     def _on_bounds_changed(self) -> None:
         if self._block or not self._control:

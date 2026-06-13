@@ -58,7 +58,7 @@ def apply_scanned_mappings(
         existing_vars.add(det.cpp_variable)
         added += 1
 
-    _backfill_parameter_ids(screen, attachments)
+    added += _backfill_parameter_ids(screen, attachments)
     return added
 
 

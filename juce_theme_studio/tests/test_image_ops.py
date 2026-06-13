@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from PIL import Image
 
@@ -22,8 +23,8 @@ def test_removes_solid_border_keeps_interior(tmp_path: Path) -> None:
     assert cleared > 0
 
     out = Image.open(path).convert("RGBA")
-    assert out.getpixel((0, 0))[3] == 0      # background corner cleared
-    assert out.getpixel((20, 20))[3] == 255  # interior art preserved
+    assert cast(tuple[int, ...], out.getpixel((0, 0)))[3] == 0      # background corner cleared
+    assert cast(tuple[int, ...], out.getpixel((20, 20)))[3] == 255  # interior art preserved
 
 
 def test_no_uniform_background_clears_nothing(tmp_path: Path) -> None:

@@ -1,5 +1,7 @@
 """Help / User Guide dialog."""
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -7,7 +9,6 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,

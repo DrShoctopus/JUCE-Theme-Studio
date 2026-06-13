@@ -18,7 +18,7 @@ Binary: `build/JuceLivePreview`
 1. Build this target on your Mac.
 2. In Theme Studio → **Live JUCE Preview** panel → browse to `JuceLivePreview`.
 3. Enable **Auto-export on edit**.
-4. Edits debounce-export to `.juce_theme_studio/exports/ThemeLayout.json` and launch/reload the preview.
+4. Edits debounce-export to `.juce_theme_studio/exports/ThemeLayout.json`; the preview reloads when that file changes.
 
 ## CLI
 
@@ -26,7 +26,7 @@ Binary: `build/JuceLivePreview`
 ./build/JuceLivePreview /path/to/.juce_theme_studio/exports/ThemeLayout.json
 ```
 
-The preview watches `.live_preview_ipc.json` in the export folder for reload signals.
+The preview watches the layout file's modification time and reloads when `ThemeLayout.json` changes.
 
 ## Note
 

@@ -88,3 +88,71 @@ def test_scan_detects_custom_page_base_subclasses(tmp_path: Path) -> None:
     assert (pedals.suggested_width, pedals.suggested_height) == (1280, 880)
     # Controls are scoped to each class body, not shared across pages.
     assert {c.cpp_variable for c in pedals.controls} == {"driveSlider"}
+
+
+def test_scan_detects_audio_processor_editor_screen(tmp_path: Path) -> None:
+    src = tmp_path / "Source"
+    src.mkdir()
+    (src / "PluginEditor.h").write_text(
+        """
+        #include <JuceHeader.h>
+        class PluginEditor final : public juce::AudioProcessorEditor
+        {
+        public:
+            PluginEditor() : juce::AudioProcessorEditor(nullptr) { setSize(640, 480); }
+        private:
+            juce::Slider gainSlider;
+        };
+        """,
+        encoding="utf-8",
+    )
+
+    result = scan_juce_project(tmp_path)
+
+    editor = next(s for s in result.screens if s.class_name == "PluginEditor")
+    assert (editor.suggested_width, editor.suggested_height) == (640, 480)
+    assert {c.cpp_variable for c in editor.controls} == {"gainSlider"}
+
+
+def test_scan_merges_ast_controls_when_backend_reports_them(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from juce_theme_studio.juce import scanner_ast
+    from juce_theme_studio.juce.scanner import DetectedControl, DetectedScreen
+
+    src = tmp_path / "Source"
+    src.mkdir()
+    path = src / "MainComponent.cpp"
+    path.write_text(
+        """
+        #include <JuceHeader.h>
+        class MainComponent : public juce::Component
+        {
+        public:
+            MainComponent() { setSize(800, 600); }
+        };
+        """,
+        encoding="utf-8",
+    )
+    calls: list[Path] = []
+
+    def fake_analyze(candidate: Path, root: Path) -> DetectedScreen | None:
+        calls.append(candidate)
+        if candidate == path:
+            return DetectedScreen(
+                id="ast",
+                name="MainComponent",
+                class_name="MainComponent",
+                source_file="Source/MainComponent.cpp",
+                controls=[DetectedControl("modeBox", "juce::ComboBox", 12)],
+            )
+        return None
+
+    monkeypatch.setattr(scanner_ast, "analyze_with_ast", fake_analyze)
+
+    result = scan_juce_project(tmp_path)
+
+    assert calls
+    main = next(s for s in result.screens if s.class_name == "MainComponent")
+    assert {c.cpp_variable for c in main.controls} == {"modeBox"}

@@ -127,7 +127,12 @@ _CLASS_HEADER_PATTERN = re.compile(
 )
 
 _ACCESS_KEYWORDS = {"public", "private", "protected", "virtual"}
-_COMPONENT_BASES = {"juce::Component", "Component"}
+_COMPONENT_BASES = {
+    "juce::Component",
+    "Component",
+    "juce::AudioProcessorEditor",
+    "AudioProcessorEditor",
+}
 
 # constexpr / const / #define integer constants used as setSize() arguments.
 _INT_CONST_PATTERN = re.compile(
@@ -371,6 +376,7 @@ def scan_juce_project(project_root: Path) -> ScanResult:
     ]
 
     result.screens = _detect_screens(all_source_files, project_root)
+    _enhance_screens_with_ast(result.screens, all_source_files, project_root)
 
     # APVTS parameter IDs and attachments can live in any source file
     # (definitions in the processor, attachments in the editor).
@@ -409,6 +415,35 @@ def _read_source_bundle(path: Path) -> str:
             except OSError:
                 pass
     return "\n".join(parts)
+
+
+def _enhance_screens_with_ast(
+    screens: list[DetectedScreen],
+    files: list[Path],
+    root: Path,
+) -> None:
+    """Merge optional AST backend controls into project-wide detected screens."""
+    try:
+        from juce_theme_studio.juce import scanner_ast
+    except ImportError:
+        return
+
+    by_class = {screen.class_name: screen for screen in screens}
+    for path in files:
+        ast_screen = scanner_ast.analyze_with_ast(path, root)
+        if ast_screen is None:
+            continue
+        target = by_class.get(ast_screen.class_name)
+        if target is None:
+            screens.append(ast_screen)
+            by_class[ast_screen.class_name] = ast_screen
+            continue
+        seen = {control.cpp_variable for control in target.controls}
+        for control in ast_screen.controls:
+            if control.cpp_variable not in seen:
+                target.controls.append(control)
+                seen.add(control.cpp_variable)
+        target.confidence = max(target.confidence, ast_screen.confidence)
 
 
 def _analyze_cpp_file(path: Path, root: Path) -> DetectedScreen | None:
@@ -463,6 +498,8 @@ def _extract_controls(text: str) -> list[DetectedControl]:
         (r"juce::ToggleButton\s+(\w+)", "juce::ToggleButton"),
         (r"juce::ImageButton\s+(\w+)", "juce::ImageButton"),
         (r"juce::Label\s+(\w+)", "juce::Label"),
+        (r"juce::ComboBox\s+(\w+)", "juce::ComboBox"),
+        (r"juce::DrawableButton\s+(\w+)", "juce::DrawableButton"),
         (r"(\w+Knob)\s+(\w+)", "CustomKnob"),
     ]
     for line_no, line in enumerate(text.splitlines(), start=1):

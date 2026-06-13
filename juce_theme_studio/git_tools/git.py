@@ -129,7 +129,16 @@ def stage_files(project_root: Path, files: list[str]) -> None:
 def commit(project_root: Path, message: str, files: list[str] | None = None) -> str:
     """Commit only when explicitly called — never auto-commit."""
     if files:
-        stage_files(project_root, files)
+        rc = _git_cmd_rc(project_root, "add", "--", *files)
+        if rc != 0:
+            raise GitCommandError("git add failed")
+        rc = _git_cmd_rc(project_root, "commit", "--only", "-m", message, "--", *files)
+        if rc != 0:
+            raise GitCommandError("git commit failed — nothing staged or commit rejected")
+        sha = _git_cmd(project_root, "rev-parse", "--short", "HEAD")
+        if not sha:
+            raise GitCommandError("git commit succeeded but rev-parse failed")
+        return sha
     if git is not None:
         repo = git.Repo(project_root, search_parent_directories=True)
         commit_obj = repo.index.commit(message)

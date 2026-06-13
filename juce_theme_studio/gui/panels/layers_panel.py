@@ -101,13 +101,13 @@ class LayersPanel(QWidget):
         control = self._current_control()
         if not control or not self._screen:
             return
-        controls = sorted(self._screen.controls, key=lambda c: c.z_index)
+        controls = sorted(self._screen.controls, key=lambda c: c.z_index, reverse=True)
         idx = next(i for i, c in enumerate(controls) if c.id == control.id)
         new_idx = idx + direction
         if new_idx < 0 or new_idx >= len(controls):
             return
         controls[idx], controls[new_idx] = controls[new_idx], controls[idx]
-        for i, c in enumerate(controls):
+        for i, c in enumerate(reversed(controls)):
             c.z_index = i
         self.set_screen(self._screen)
         self.select_control(control.id)

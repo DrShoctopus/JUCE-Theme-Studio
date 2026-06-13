@@ -109,8 +109,8 @@ class ControlGraphicsItem(QGraphicsObject):
             frame_idx = 0
             key = f"{path}|{mtime}|whole"
 
-        cached = QPixmapCache.find(key)
-        if cached is not None and not cached.isNull():
+        cached = QPixmap()
+        if QPixmapCache.find(key, cached) and not cached.isNull():
             self._pixmap = cached
             return
         try:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 from pathlib import Path
@@ -10,12 +9,9 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from juce_theme_studio.core.manifest import ThemeManifest
-from juce_theme_studio.core.types import STUDIO_DIR
-from juce_theme_studio.juce.exporter import export_theme
+from juce_theme_studio.juce.exporter import _safe_export_dir, export_theme
 
 logger = logging.getLogger(__name__)
-
-MIME_LAYOUT = "application/x-juce-theme-layout-path"
 
 
 class LivePreviewBridge(QObject):
@@ -74,8 +70,14 @@ class LivePreviewBridge(QObject):
     def layout_export_path(self) -> Path | None:
         if self._project_root is None or self._manifest is None:
             return None
-        sub = self._manifest.export_settings.output_subdir
-        return self._project_root / STUDIO_DIR / sub / "ThemeLayout.json"
+        try:
+            export_dir = _safe_export_dir(
+                self._project_root,
+                self._manifest.export_settings.output_subdir,
+            )
+        except ValueError:
+            return None
+        return export_dir / "ThemeLayout.json"
 
     def _on_tick(self) -> None:
         if not self._enabled or not self._dirty:
@@ -104,25 +106,11 @@ class LivePreviewBridge(QObject):
             )
 
         if self._process.state() == QProcess.ProcessState.Running:
-            self._write_ipc(layout_path)
+            self.status_changed.emit(f"Updated {layout_path.name}")
             return
 
         self._process.start(str(self._external_path), [str(layout_path)])
         self.status_changed.emit(f"Launched JUCE preview: {self._external_path.name}")
-
-    def _write_ipc(self, layout_path: Path) -> None:
-        ipc = layout_path.parent / ".live_preview_ipc.json"
-        ipc.write_text(
-            json.dumps(
-                {
-                    "layout": str(layout_path),
-                    "reload": True,
-                    "mime": MIME_LAYOUT,
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
 
     def _stop_external(self) -> None:
         if self._process and self._process.state() == QProcess.ProcessState.Running:

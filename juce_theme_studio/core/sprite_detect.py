@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from PIL import Image, ImageChops
 
@@ -128,7 +129,8 @@ def _content_grid(img: Image.Image) -> tuple[int, int]:
     rgba = img.convert("RGBA")
     w, h = rgba.size
     alpha = rgba.getchannel("A")
-    if alpha.getextrema()[0] < 16:
+    alpha_extrema = cast(tuple[int, int], alpha.getextrema())
+    if alpha_extrema[0] < 16:
         mask = alpha
     else:
         rgb = rgba.convert("RGB")
@@ -148,8 +150,9 @@ def _content_grid(img: Image.Image) -> tuple[int, int]:
 def _corner_color(img: Image.Image) -> tuple[int, int, int]:
     w, h = img.size
     pts = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)]
-    chans = list(zip(*(img.getpixel(p)[:3] for p in pts)))
-    return tuple(sorted(c)[len(c) // 2] for c in chans)  # type: ignore[return-value]
+    pixels = [cast(tuple[int, ...], img.getpixel(p)) for p in pts]
+    r, g, b = (tuple(sorted(channel)[len(channel) // 2] for channel in zip(*pixels)))
+    return r, g, b
 
 
 def _detect_pillow(image_path: Path) -> SpriteDetectionResult:

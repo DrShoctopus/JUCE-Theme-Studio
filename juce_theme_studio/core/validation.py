@@ -45,6 +45,11 @@ class ValidationReport:
         self.issues.append(ValidationIssue(level, message, screen_id, control_id))
 
 
+def _is_safe_relative_subdir(value: str) -> bool:
+    path = Path(value)
+    return bool(value.strip()) and not path.is_absolute() and ".." not in path.parts
+
+
 def validate_manifest(manifest: ThemeManifest, project_root: Path) -> ValidationReport:
     report = ValidationReport()
 
@@ -66,6 +71,10 @@ def validate_manifest(manifest: ThemeManifest, project_root: Path) -> Validation
     ns = manifest.export_settings.namespace
     if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", ns):
         report.add("error", f"Invalid C++ export namespace: {ns!r}")
+
+    subdir = manifest.export_settings.output_subdir
+    if not _is_safe_relative_subdir(subdir):
+        report.add("error", f"Invalid export output subdir: {subdir!r}")
 
     for screen in manifest.screens:
         if screen.background_asset_id:
@@ -110,6 +119,9 @@ def validate_manifest(manifest: ThemeManifest, project_root: Path) -> Validation
                 if sc.frame_width < 1 or sc.frame_height < 1:
                     report.add("error", "Invalid frame dimensions.", screen.id, control.id)
 
+            if control.width < 1 or control.height < 1:
+                report.add("error", "Control has non-positive dimensions.", screen.id, control.id)
+
             if control.control_type in {ControlType.KNOB, ControlType.SLIDER}:
                 if not control.mapping.parameter_id:
                     report.add(
@@ -120,7 +132,9 @@ def validate_manifest(manifest: ThemeManifest, project_root: Path) -> Validation
                     )
 
             out_of_bounds = (
-                control.x + control.width > screen.canvas_width
+                control.x < 0
+                or control.y < 0
+                or control.x + control.width > screen.canvas_width
                 or control.y + control.height > screen.canvas_height
             )
             if out_of_bounds:

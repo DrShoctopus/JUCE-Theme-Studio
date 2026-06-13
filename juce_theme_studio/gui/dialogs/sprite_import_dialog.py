@@ -217,5 +217,5 @@ class SpriteImportDialog(QDialog):
             frame_height=self._frame_h.value(),
             frame_count=self._frame_count.value(),
             columns=self._columns.value(),
-            rows=max(1, self._frame_count.value() // max(1, self._columns.value())),
+            rows=max(1, -(-self._frame_count.value() // max(1, self._columns.value()))),
         )

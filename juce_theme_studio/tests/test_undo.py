@@ -62,4 +62,5 @@ def test_assign_from_restores_all_fields_in_place() -> None:
     assert target.preview_value == 0.7
     assert target.locked is True
     assert target.sprite_config is not source.sprite_config  # deep-copied
+    assert target.sprite_config is not None
     assert target.sprite_config.frame_count == 12

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from PIL import Image, ImageDraw
 
@@ -16,8 +17,9 @@ def _corner_color(img: Image.Image) -> tuple[int, int, int]:
     """Median background colour sampled from the four corners."""
     w, h = img.size
     pts = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)]
-    chans = list(zip(*(img.getpixel(p)[:3] for p in pts)))
-    return tuple(sorted(c)[len(c) // 2] for c in chans)  # type: ignore[return-value]
+    pixels = [cast(tuple[int, ...], img.getpixel(p)) for p in pts]
+    r, g, b = (tuple(sorted(channel)[len(channel) // 2] for channel in zip(*pixels)))
+    return r, g, b
 
 
 def make_background_transparent(
@@ -41,7 +43,7 @@ def make_background_transparent(
     sentinel = (1, 254, 1)  # unlikely to occur in real artwork
     w, h = img.size
     for corner in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
-        if _within(rgb.getpixel(corner), key, tolerance):
+        if _within(cast(tuple[int, ...], rgb.getpixel(corner)), key, tolerance):
             ImageDraw.floodfill(rgb, corner, sentinel, thresh=tolerance)
 
     rgb_bytes = rgb.tobytes()

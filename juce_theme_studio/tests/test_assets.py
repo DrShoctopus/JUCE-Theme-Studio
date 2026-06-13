@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from juce_theme_studio.core.assets import (
     asset_exists,
     delete_asset,
@@ -13,7 +15,7 @@ from juce_theme_studio.core.assets import (
     unimported_project_images,
 )
 from juce_theme_studio.core.controls import create_control
-from juce_theme_studio.core.manifest import Screen, ThemeManifest
+from juce_theme_studio.core.manifest import AssetEntry, Screen, ThemeManifest
 from juce_theme_studio.core.project import ensure_studio_dirs
 from juce_theme_studio.core.types import ControlType
 
@@ -46,6 +48,28 @@ def test_delete_asset_removes_file(fixture_project: Path) -> None:
     assert deleted is entry
     assert manifest.assets == []
     assert not dest.is_file()
+
+
+def test_delete_asset_rejects_manifest_path_outside_library(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside.png"
+    outside.write_text("do not delete")
+    manifest = ThemeManifest(
+        assets=[
+            AssetEntry(
+                id="bad",
+                name="Bad",
+                relative_path=str(outside),
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="outside"):
+        delete_asset(manifest, project, "bad")
+
+    assert outside.is_file()
+    assert manifest.assets[0].id == "bad"
 
 
 def test_delete_asset_clears_references(fixture_project: Path) -> None:
