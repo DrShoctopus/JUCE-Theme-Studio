@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -658,6 +659,57 @@ def test_execute_managed_apply_aborts_when_source_changed_after_preview(
     with pytest.raises(RuntimeError, match="source file changed since preview"):
         execute_managed_apply(plan)
     assert not (fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json").exists()
+
+
+def test_execute_managed_apply_rejects_symlinked_generated_source_file(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="source-file-link")
+    layout = next(op for op in plan.operations if op.target_rel.endswith("ThemeLayout.json"))
+    source = plan.generated_dir / layout.source_rel
+    redirected_source = fixture_project.parent / "redirected-layout-source.json"
+    redirected_source.write_bytes(source.read_bytes())
+    source.unlink()
+    source.symlink_to(redirected_source)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        execute_managed_apply(plan)
+
+    record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "failed"
+    assert "symlink" in record["message"]
+    assert not (fixture_project / layout.target_rel).exists()
+
+
+def test_execute_managed_apply_rejects_symlinked_generated_source_parent(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="source-parent-link")
+    asset = next(op for op in plan.operations if op.source_rel.startswith("assets/"))
+    source = plan.generated_dir / asset.source_rel
+    redirected_assets = fixture_project.parent / "redirected-assets-source"
+    redirected_asset = redirected_assets / Path(asset.source_rel).relative_to("assets")
+    redirected_asset.parent.mkdir(parents=True)
+    redirected_asset.write_bytes(source.read_bytes())
+    assets_dir = plan.generated_dir / "assets"
+    shutil.rmtree(assets_dir)
+    assets_dir.symlink_to(redirected_assets, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        execute_managed_apply(plan)
+
+    record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "failed"
+    assert "symlink" in record["message"]
+    assert not (fixture_project / asset.target_rel).exists()
 
 
 def test_execute_managed_apply_aborts_when_unchanged_source_deleted_after_preview(

@@ -668,6 +668,7 @@ def _safe_copy_target_file(plan: ApplyPlan, op: ApplyOperation, source: Path, ta
     temp = _temp_sibling(target)
     try:
         _reject_symlinked_project_components(plan.project_root, temp, label="target temp")
+        _validate_generated_source_path(plan, source, label=f"{op.target_rel} source")
         _copy_verified_to_temp(
             source,
             temp,
@@ -763,7 +764,34 @@ def _operation_source_path(plan: ApplyPlan, op: ApplyOperation) -> Path:
     source_rel = _safe_relative_record_path(op.source_rel)
     if source_rel is None:
         raise RuntimeError(f"Invalid source path for {op.target_rel}: {op.source_rel}")
-    return plan.generated_dir / source_rel
+    source = plan.generated_dir / source_rel
+    _validate_generated_source_path(plan, source, label=f"{op.target_rel} source")
+    return source
+
+
+def _validate_generated_source_path(plan: ApplyPlan, source: Path, *, label: str) -> None:
+    generated_rel = _transaction_relative_path(
+        plan,
+        plan.generated_dir,
+        label="generated directory",
+    )
+    if not generated_rel.parts:
+        raise RuntimeError(
+            f"Unsafe generated directory: not inside transaction: {plan.generated_dir}"
+        )
+    _reject_symlinked_project_components(
+        plan.project_root,
+        plan.generated_dir,
+        label="generated directory",
+    )
+    try:
+        source_rel = source.relative_to(plan.generated_dir)
+    except ValueError as exc:
+        raise RuntimeError(f"Unsafe {label}: outside generated directory: {source}") from exc
+    if not source_rel.parts or ".." in source_rel.parts:
+        raise RuntimeError(f"Unsafe {label}: path escapes generated directory: {source}")
+    _transaction_relative_path(plan, source, label=label)
+    _reject_symlinked_project_components(plan.project_root, source, label=label)
 
 
 def _operation_target_path(plan: ApplyPlan, op: ApplyOperation) -> Path:
