@@ -59,7 +59,27 @@ def test_managed_destination_rejects_path_escape(fixture_project: Path) -> None:
         )
 
 
-def test_managed_destination_subdir_is_normalized(fixture_project: Path) -> None:
+def test_managed_destination_rejects_windows_style_path_escape(fixture_project: Path) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import plan_managed_apply
+
+    with pytest.raises(ValueError, match="destination"):
+        plan_managed_apply(
+            loaded.manifest,
+            loaded.root,
+            destination_subdir=r"Source\..\escape",
+        )
+
+
+@pytest.mark.parametrize(
+    "destination_subdir",
+    ["Source/./ThemeStudio", r"Source\ThemeStudio"],
+)
+def test_managed_destination_subdir_is_normalized(
+    fixture_project: Path,
+    destination_subdir: str,
+) -> None:
     loaded = _project_with_theme(fixture_project)
 
     from juce_theme_studio.core.managed_apply import plan_managed_apply
@@ -67,7 +87,7 @@ def test_managed_destination_subdir_is_normalized(fixture_project: Path) -> None
     plan = plan_managed_apply(
         loaded.manifest,
         loaded.root,
-        destination_subdir="Source/./ThemeStudio",
+        destination_subdir=destination_subdir,
         apply_id="apply123",
     )
 

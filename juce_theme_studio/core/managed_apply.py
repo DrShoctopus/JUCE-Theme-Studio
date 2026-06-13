@@ -116,7 +116,8 @@ def _applies_dir(project_root: Path) -> Path:
 
 
 def _safe_project_subdir(project_root: Path, subdir: str, *, label: str) -> Path:
-    rel = Path(subdir)
+    normalized = subdir.replace("\\", "/")
+    rel = Path(normalized)
     if not subdir.strip() or rel.is_absolute() or ".." in rel.parts:
         raise ValueError(f"Invalid {label}: {subdir!r}")
     root = project_root.resolve()
