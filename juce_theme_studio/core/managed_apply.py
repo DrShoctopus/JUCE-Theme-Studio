@@ -51,6 +51,17 @@ class ApplyStatus(str, Enum):
     REVERT_FAILED = "revert_failed"
 
 
+_ACTIVE_HISTORY_STATUSES = {
+    ApplyStatus.COMPLETED.value,
+    ApplyStatus.REVERTING.value,
+    ApplyStatus.REVERT_FAILED.value,
+}
+_UNRESOLVED_REVERT_STATUSES = {
+    ApplyStatus.REVERTING.value,
+    ApplyStatus.REVERT_FAILED.value,
+}
+
+
 @dataclass
 class ApplyOperation:
     kind: ApplyOperationKind
@@ -422,13 +433,18 @@ def _validated_replace_backup_rel(
     return backup_rel
 
 
-def _validated_completed_record(
+def _validated_history_record(
     project_root: Path,
     record: dict[str, Any] | None,
     *,
     record_path: Path | None = None,
+    allowed_statuses: set[str] | None = None,
 ) -> dict[str, Any] | None:
-    if not isinstance(record, dict) or record.get("status") != ApplyStatus.COMPLETED.value:
+    allowed = allowed_statuses or {ApplyStatus.COMPLETED.value}
+    if not isinstance(record, dict):
+        return None
+    status = record.get("status")
+    if status not in allowed:
         return None
     trusted_apply_id = None
     if record_path is not None:
@@ -463,9 +479,23 @@ def _validated_completed_record(
         sanitized["apply_id"] = trusted_apply_id
         sanitized["record_path"] = str(record_path)
         sanitized["transaction_dir"] = str(record_path.parent)
-    sanitized["status"] = ApplyStatus.COMPLETED.value
+    sanitized["status"] = str(status)
     sanitized["operations"] = valid_operations
     return sanitized
+
+
+def _validated_completed_record(
+    project_root: Path,
+    record: dict[str, Any] | None,
+    *,
+    record_path: Path | None = None,
+) -> dict[str, Any] | None:
+    return _validated_history_record(
+        project_root,
+        record,
+        record_path=record_path,
+        allowed_statuses={ApplyStatus.COMPLETED.value},
+    )
 
 
 def _read_apply_record(path: Path) -> dict[str, Any] | None:
@@ -504,7 +534,10 @@ def _history_record_path_is_safe(project_root: Path, path: Path) -> bool:
     return True
 
 
-def completed_apply_records(project_root: Path) -> list[dict[str, Any]]:
+def _history_records_with_statuses(
+    project_root: Path,
+    allowed_statuses: set[str],
+) -> list[dict[str, Any]]:
     project_root = project_root.resolve()
     applies = _applies_dir(project_root)
     try:
@@ -519,10 +552,11 @@ def completed_apply_records(project_root: Path) -> list[dict[str, Any]]:
     for path in sorted(applies.glob("*/apply.json")):
         if not _history_record_path_is_safe(project_root, path):
             continue
-        record = _validated_completed_record(
+        record = _validated_history_record(
             project_root,
             _read_apply_record(path),
             record_path=path,
+            allowed_statuses=allowed_statuses,
         )
         if record is None:
             continue
@@ -539,15 +573,36 @@ def completed_apply_records(project_root: Path) -> list[dict[str, Any]]:
     return [record for _, _, _, record in records]
 
 
+def completed_apply_records(project_root: Path) -> list[dict[str, Any]]:
+    return _history_records_with_statuses(
+        project_root,
+        {ApplyStatus.COMPLETED.value},
+    )
+
+
 def latest_completed_apply(project_root: Path) -> dict[str, Any] | None:
     records = completed_apply_records(project_root)
     return records[-1] if records else None
 
 
+def latest_active_apply(project_root: Path) -> dict[str, Any] | None:
+    records = _history_records_with_statuses(project_root, _ACTIVE_HISTORY_STATUSES)
+    return records[-1] if records else None
+
+
+def _raise_unresolved_revert(record: dict[str, Any]) -> None:
+    raise RuntimeError(
+        "Latest managed apply has unresolved managed apply revert "
+        f"status {record['status']!r} for apply_id {record['apply_id']!r}"
+    )
+
+
 def _latest_managed_checksums(project_root: Path) -> dict[str, str]:
-    latest = latest_completed_apply(project_root)
+    latest = latest_active_apply(project_root)
     if not latest:
         return {}
+    if latest["status"] in _UNRESOLVED_REVERT_STATUSES:
+        _raise_unresolved_revert(latest)
     transaction_dir = latest.get("transaction_dir")
     backup_root = Path(transaction_dir) / "backups" if isinstance(transaction_dir, str) else None
     checksums: dict[str, str] = {}
@@ -656,12 +711,12 @@ def plan_managed_apply(
         raise FileExistsError(f"Apply transaction already exists for apply_id {tx_id!r}")
     generated_dir = transaction_dir / "generated"
     destination_rel = _rel(destination, project_root)
+    managed_checksums = _latest_managed_checksums(project_root)
     _ensure_safe_project_directory(project_root, transaction_dir, label="transaction directory")
 
     export_result = export_theme_to_directory(manifest, project_root, generated_dir, force=True)
     validation = export_result.validation
 
-    managed_checksums = _latest_managed_checksums(project_root)
     operations: list[ApplyOperation] = []
     for source in _generated_payload_files(generated_dir):
         source_rel = _rel(source, generated_dir)
@@ -873,9 +928,11 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
 
 def revert_last_apply(project_root: Path, *, force: bool = False) -> RevertResult:
     project_root = project_root.resolve()
-    record = latest_completed_apply(project_root)
+    record = latest_active_apply(project_root)
     if record is None:
         raise RuntimeError("No completed managed apply to revert")
+    if record["status"] in _UNRESOLVED_REVERT_STATUSES:
+        _raise_unresolved_revert(record)
     selected_record = _revert_record_base(record)
 
     apply_id = _safe_apply_id(str(selected_record["apply_id"]))
@@ -889,7 +946,9 @@ def revert_last_apply(project_root: Path, *, force: bool = False) -> RevertResul
         project_root=project_root,
         transaction_dir=transaction_dir,
         generated_dir=transaction_dir / "generated",
-        destination_subdir=str(selected_record.get("destination_subdir", DEFAULT_DESTINATION_SUBDIR)),
+        destination_subdir=str(
+            selected_record.get("destination_subdir", DEFAULT_DESTINATION_SUBDIR)
+        ),
         operations=[ApplyOperation.from_dict(item) for item in selected_record["operations"]],
         status=ApplyStatus.COMPLETED,
     )

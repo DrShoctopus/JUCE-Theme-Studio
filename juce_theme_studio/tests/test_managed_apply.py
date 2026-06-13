@@ -1715,3 +1715,134 @@ def test_revert_writes_sanitized_selected_record_when_raw_record_changes(
     assert record["operations"] == [operation]
     assert "poisoned" not in record
     assert record["status"] == "reverted"
+
+
+def test_revert_blocks_when_latest_apply_is_revert_failed(
+    fixture_project: Path,
+) -> None:
+    from juce_theme_studio.core.managed_apply import revert_last_apply, sha256_file
+
+    older_target = fixture_project / "Source" / "ThemeStudio" / "older-created.txt"
+    older_target.parent.mkdir(parents=True)
+    older_target.write_text("older managed file\n", encoding="utf-8")
+    older_operation = {
+        "kind": "create",
+        "source_rel": "generated/older-created.txt",
+        "target_rel": "Source/ThemeStudio/older-created.txt",
+        "source_checksum": sha256_file(older_target),
+        "target_checksum": "",
+        "backup_rel": "",
+        "message": "older completed apply",
+    }
+    _write_apply_record(
+        fixture_project,
+        "older-completed",
+        _completed_record(
+            older_operation,
+            completed_at="2026-06-13T12:00:00+00:00",
+        ),
+    )
+    latest_target = fixture_project / "Source" / "ThemeStudio" / "latest-created.txt"
+    latest_target.write_text("latest partially reverted file\n", encoding="utf-8")
+    latest_operation = {
+        "kind": "create",
+        "source_rel": "generated/latest-created.txt",
+        "target_rel": "Source/ThemeStudio/latest-created.txt",
+        "source_checksum": sha256_file(latest_target),
+        "target_checksum": "",
+        "backup_rel": "",
+        "message": "latest failed revert",
+    }
+    latest_record = _completed_record(
+        latest_operation,
+        completed_at="2026-06-13T13:00:00+00:00",
+    )
+    latest_record["status"] = "revert_failed"
+    _write_apply_record(fixture_project, "latest-revert-failed", latest_record)
+
+    with pytest.raises(RuntimeError, match="unresolved managed apply revert"):
+        revert_last_apply(fixture_project)
+
+    older_record = json.loads(
+        (
+            fixture_project
+            / ".juce_theme_studio"
+            / "applies"
+            / "older-completed"
+            / "apply.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert older_record["status"] == "completed"
+    assert older_target.read_text(encoding="utf-8") == "older managed file\n"
+
+
+def test_revert_blocks_when_latest_apply_is_reverting(
+    fixture_project: Path,
+) -> None:
+    from juce_theme_studio.core.managed_apply import revert_last_apply, sha256_file
+
+    target = fixture_project / "Source" / "ThemeStudio" / "still-reverting.txt"
+    target.parent.mkdir(parents=True)
+    target.write_text("reverting managed file\n", encoding="utf-8")
+    operation = {
+        "kind": "create",
+        "source_rel": "generated/still-reverting.txt",
+        "target_rel": "Source/ThemeStudio/still-reverting.txt",
+        "source_checksum": sha256_file(target),
+        "target_checksum": "",
+        "backup_rel": "",
+        "message": "revert in progress",
+    }
+    record = _completed_record(operation, completed_at="2026-06-13T13:00:00+00:00")
+    record["status"] = "reverting"
+    _write_apply_record(fixture_project, "latest-reverting", record)
+
+    with pytest.raises(RuntimeError, match="unresolved managed apply revert"):
+        revert_last_apply(fixture_project)
+
+    assert target.read_text(encoding="utf-8") == "reverting managed file\n"
+
+
+def test_plan_managed_apply_blocks_when_latest_apply_is_revert_failed(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+    target = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("older managed layout\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import plan_managed_apply, sha256_file
+
+    old_checksum = sha256_file(target)
+    older_operation = _history_replace_operation(
+        fixture_project,
+        "older-authorized",
+        "Source/ThemeStudio/ThemeLayout.json",
+        old_checksum,
+    )
+    _write_apply_record(
+        fixture_project,
+        "older-authorized",
+        _completed_record(
+            older_operation,
+            completed_at="2026-06-13T12:00:00+00:00",
+        ),
+    )
+    latest_operation = {
+        "kind": "create",
+        "source_rel": "generated/latest-created.txt",
+        "target_rel": "Source/ThemeStudio/latest-created.txt",
+        "source_checksum": old_checksum,
+        "target_checksum": "",
+        "backup_rel": "",
+        "message": "latest failed revert",
+    }
+    latest_record = _completed_record(
+        latest_operation,
+        completed_at="2026-06-13T13:00:00+00:00",
+    )
+    latest_record["status"] = "revert_failed"
+    _write_apply_record(fixture_project, "latest-plan-revert-failed", latest_record)
+
+    with pytest.raises(RuntimeError, match="unresolved managed apply revert"):
+        plan_managed_apply(loaded.manifest, loaded.root, apply_id="blocked-plan")
