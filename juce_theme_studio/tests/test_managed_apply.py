@@ -454,6 +454,37 @@ def test_malformed_completed_records_are_ignored_and_conflict_remains_conflict(
     assert layout.kind == ApplyOperationKind.CONFLICT
 
 
+def test_partially_invalid_completed_record_is_ignored(fixture_project: Path) -> None:
+    loaded = _project_with_theme(fixture_project)
+    target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("hand edited\n", encoding="utf-8")
+
+    from juce_theme_studio.core.managed_apply import (
+        ApplyOperationKind,
+        plan_managed_apply,
+        sha256_file,
+    )
+
+    valid = _history_operation("Source/ThemeStudio/ThemeLayout.json", sha256_file(target))
+    invalid = _history_operation("../escape.json", sha256_file(target))
+    _write_apply_record(
+        loaded.root,
+        "partial-invalid",
+        {
+            "status": "completed",
+            "created_at": "2026-06-13T11:59:00+00:00",
+            "completed_at": "2026-06-13T12:00:00+00:00",
+            "operations": [valid, invalid],
+        },
+    )
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="partial-invalid-plan")
+
+    layout = next(op for op in plan.operations if op.target_rel.endswith("ThemeLayout.json"))
+    assert layout.kind == ApplyOperationKind.CONFLICT
+
+
 def test_completed_apply_records_clear_invalid_backup_rel(fixture_project: Path) -> None:
     loaded = _project_with_theme(fixture_project)
     target = loaded.root / "Source" / "ThemeStudio" / "ThemeLayout.json"
@@ -684,6 +715,7 @@ def test_execute_managed_apply_failed_record_preserves_partial_recovery_metadata
     backup_rels = [op["backup_rel"] for op in record["operations"] if op["backup_rel"]]
     assert record["status"] == "failed"
     assert record["files_written"] == [replace_ops[0].target_rel]
+    assert record["files_touched"] == [op.target_rel for op in replace_ops]
     assert len(record["backups"]) >= 2
     assert any(rel.endswith(replace_ops[0].target_rel) for rel in backup_rels)
     assert any(rel.endswith(replace_ops[1].target_rel) for rel in backup_rels)
@@ -703,10 +735,10 @@ def test_execute_managed_apply_fails_when_copied_target_checksum_mismatches(
     real_copy2 = managed_apply_module.shutil.copy2
 
     def corrupt_managed_copy(src: Path, dst: Path) -> Path:
-        target = Path(dst)
-        if target == fixture_project / target_rel:
-            target.write_text("wrong target content\n", encoding="utf-8")
-            return target
+        destination = Path(dst)
+        if Path(src) == plan.generated_dir / "ThemeLayout.json":
+            destination.write_text("wrong target content\n", encoding="utf-8")
+            return destination
         return real_copy2(src, dst)
 
     monkeypatch.setattr(managed_apply_module.shutil, "copy2", corrupt_managed_copy)
@@ -756,6 +788,90 @@ def test_execute_managed_apply_fails_before_overwrite_when_backup_checksum_misma
     assert record["status"] == "failed"
     assert "backup checksum mismatch" in record["message"]
     assert "Source/ThemeStudio/ThemeLayout.json" not in record["files_touched"]
+
+
+def test_execute_managed_apply_rejects_symlinked_backup_directory(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="backup-link-first")
+    execute_managed_apply(first)
+    loaded.manifest.theme_colors["primary"] = "ff556677"
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="backup-link-second")
+    redirected = fixture_project.parent / "redirected-backups"
+    redirected.mkdir()
+    (second.transaction_dir / "backups").symlink_to(redirected, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        execute_managed_apply(second)
+
+    record = json.loads(second.record_path.read_text(encoding="utf-8"))
+    assert not any(redirected.rglob("*"))
+    assert record["status"] == "failed"
+
+
+def test_execute_managed_apply_rejects_symlinked_record_path(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="record-link")
+    redirected_record = fixture_project.parent / "redirected-apply.json"
+    redirected_record.write_text("outside record\n", encoding="utf-8")
+    plan.record_path.unlink()
+    plan.record_path.symlink_to(redirected_record)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        execute_managed_apply(plan)
+
+    assert redirected_record.read_text(encoding="utf-8") == "outside record\n"
+    assert not (fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json").exists()
+
+
+def test_execute_managed_apply_rejects_target_swapped_to_symlink_before_write(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="swap-link-first")
+    execute_managed_apply(first)
+    loaded.manifest.theme_colors["primary"] = "ff667788"
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="swap-link-second")
+    layout = next(op for op in second.operations if op.target_rel.endswith("ThemeLayout.json"))
+    target = fixture_project / layout.target_rel
+    redirected = target.parent / "redirected-layout.json"
+    redirected_original = "redirected original\n"
+    redirected.write_text(redirected_original, encoding="utf-8")
+    source = second.generated_dir / layout.source_rel
+    real_copy2 = managed_apply_module.shutil.copy2
+    swapped = False
+
+    def swap_target_before_copy(src: Path, dst: Path) -> Path:
+        nonlocal swapped
+        if Path(src) == source and not swapped:
+            target.unlink()
+            target.symlink_to(redirected)
+            swapped = True
+        return real_copy2(src, dst)
+
+    monkeypatch.setattr(managed_apply_module.shutil, "copy2", swap_target_before_copy)
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        execute_managed_apply(second)
+
+    record = json.loads(second.record_path.read_text(encoding="utf-8"))
+    assert redirected.read_text(encoding="utf-8") == redirected_original
+    assert target.is_symlink()
+    assert record["status"] == "failed"
 
 
 def test_execute_managed_apply_rejects_symlinked_target_file(

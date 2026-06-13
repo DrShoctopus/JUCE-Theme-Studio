@@ -161,6 +161,18 @@ def _rel(path: Path, root: Path) -> str:
     return str(path.relative_to(root)).replace("\\", "/")
 
 
+def _project_relative_path(project_root: Path, path: Path, *, label: str) -> Path:
+    root = project_root.resolve()
+    candidate = path if path.is_absolute() else root / path
+    try:
+        rel = candidate.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError(f"Unsafe {label}: outside project: {candidate}") from exc
+    if ".." in rel.parts:
+        raise RuntimeError(f"Unsafe {label}: path escapes project: {candidate}")
+    return rel
+
+
 def _reject_symlinked_path_components(root: Path, rel: Path, *, label: str) -> None:
     current = root
     for part in rel.parts:
@@ -169,6 +181,87 @@ def _reject_symlinked_path_components(root: Path, rel: Path, *, label: str) -> N
             raise ValueError(f"Invalid {label}: symlink at {_rel(current, root)!r}")
         if not current.exists():
             break
+
+
+def _reject_symlinked_project_components(project_root: Path, path: Path, *, label: str) -> None:
+    root = project_root.resolve()
+    rel = _project_relative_path(root, path, label=label)
+    current = root
+    for part in rel.parts:
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError(f"Unsafe {label}: symlink at {_rel(current, root)}")
+        if not current.exists():
+            break
+
+
+def _ensure_safe_project_directory(project_root: Path, path: Path, *, label: str) -> None:
+    root = project_root.resolve()
+    rel = _project_relative_path(root, path, label=label)
+    current = root
+    for part in rel.parts:
+        current = current / part
+        if current.is_symlink():
+            raise RuntimeError(f"Unsafe {label}: symlink at {_rel(current, root)}")
+        if current.exists():
+            if not current.is_dir():
+                raise RuntimeError(f"Unsafe {label}: not a directory: {_rel(current, root)}")
+            continue
+        current.mkdir()
+    _reject_symlinked_project_components(root, path, label=label)
+
+
+def _transaction_relative_path(plan: ApplyPlan, path: Path, *, label: str) -> Path:
+    try:
+        rel = path.relative_to(plan.transaction_dir)
+    except ValueError as exc:
+        raise RuntimeError(f"Unsafe {label}: outside transaction: {path}") from exc
+    if ".." in rel.parts:
+        raise RuntimeError(f"Unsafe {label}: path escapes transaction: {path}")
+    return rel
+
+
+def _ensure_safe_transaction_directory(plan: ApplyPlan, path: Path, *, label: str) -> None:
+    _transaction_relative_path(plan, path, label=label)
+    _ensure_safe_project_directory(plan.project_root, path, label=label)
+
+
+def _ensure_safe_transaction_file_path(
+    plan: ApplyPlan,
+    path: Path,
+    *,
+    label: str,
+    create_parent: bool = True,
+) -> None:
+    _transaction_relative_path(plan, path, label=label)
+    if create_parent:
+        _ensure_safe_transaction_directory(plan, path.parent, label=f"{label} parent")
+    else:
+        _reject_symlinked_project_components(
+            plan.project_root,
+            path.parent,
+            label=f"{label} parent",
+        )
+    _reject_symlinked_project_components(plan.project_root, path, label=label)
+
+
+def _temp_sibling(path: Path) -> Path:
+    return path.with_name(f".{path.name}.{make_apply_id()}.tmp")
+
+
+def _prepare_temp_file(project_root: Path, path: Path, *, label: str) -> None:
+    _reject_symlinked_project_components(project_root, path, label=label)
+    if not path.exists():
+        return
+    if path.is_file() and not path.is_symlink():
+        path.unlink()
+        return
+    raise RuntimeError(f"Unsafe {label}: cannot replace temporary path: {path}")
+
+
+def _cleanup_temp_file(path: Path) -> None:
+    if path.exists() and path.is_file() and not path.is_symlink():
+        path.unlink()
 
 
 def _safe_relative_record_path(value: Any) -> str | None:
@@ -286,18 +379,16 @@ def _validated_completed_record(
         return None
 
     backup_root = record_path.parent / "backups" if record_path is not None else None
-    valid_operations = [
-        operation
-        for item in operations
-        if (
-            operation := _validated_history_operation(
-                project_root,
-                item,
-                backup_root=backup_root,
-            )
+    valid_operations: list[dict[str, Any]] = []
+    for item in operations:
+        operation = _validated_history_operation(
+            project_root,
+            item,
+            backup_root=backup_root,
         )
-        is not None
-    ]
+        if operation is None:
+            return None
+        valid_operations.append(operation)
     if not valid_operations:
         return None
 
@@ -312,7 +403,7 @@ def _validated_completed_record(
 
 
 def _read_apply_record(path: Path) -> dict[str, Any] | None:
-    if not path.is_file():
+    if path.is_symlink() or not path.is_file():
         return None
     try:
         with path.open(encoding="utf-8") as handle:
@@ -394,8 +485,46 @@ def _validation_to_dict(validation: ValidationReport | None) -> dict[str, Any]:
     }
 
 
+def _safe_write_transaction_text(plan: ApplyPlan, path: Path, text: str, *, label: str) -> None:
+    _ensure_safe_transaction_file_path(plan, path, label=label)
+    temp = _temp_sibling(path)
+    try:
+        _ensure_safe_transaction_file_path(plan, temp, label=f"{label} temp")
+        _prepare_temp_file(plan.project_root, temp, label=f"{label} temp")
+        temp.write_text(text, encoding="utf-8")
+        _ensure_safe_transaction_file_path(plan, path, label=label)
+        temp.replace(path)
+        _ensure_safe_transaction_file_path(plan, path, label=label)
+    except Exception:
+        _cleanup_temp_file(temp)
+        raise
+
+
+def _write_record_data(plan: ApplyPlan, data: dict[str, Any]) -> None:
+    _safe_write_transaction_text(
+        plan,
+        plan.record_path,
+        json.dumps(data, indent=2) + "\n",
+        label="apply record",
+    )
+
+
+def _copy_verified_to_temp(
+    source: Path,
+    temp: Path,
+    expected_checksum: str,
+    project_root: Path,
+    *,
+    label: str,
+) -> None:
+    _prepare_temp_file(project_root, temp, label=label)
+    shutil.copy2(source, temp)
+    if sha256_file(temp) != expected_checksum:
+        raise RuntimeError(f"{label} checksum mismatch")
+
+
 def _write_plan_record(plan: ApplyPlan) -> None:
-    plan.transaction_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_safe_transaction_directory(plan, plan.transaction_dir, label="transaction directory")
     data = {
         "apply_id": plan.apply_id,
         "status": plan.status.value,
@@ -406,7 +535,7 @@ def _write_plan_record(plan: ApplyPlan) -> None:
         "validation": _validation_to_dict(plan.validation),
         "operations": [op.to_dict() for op in plan.operations],
     }
-    plan.record_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    _write_record_data(plan, data)
 
 
 def plan_managed_apply(
@@ -424,6 +553,7 @@ def plan_managed_apply(
         raise FileExistsError(f"Apply transaction already exists for apply_id {tx_id!r}")
     generated_dir = transaction_dir / "generated"
     destination_rel = _rel(destination, project_root)
+    _ensure_safe_project_directory(project_root, transaction_dir, label="transaction directory")
 
     export_result = export_theme_to_directory(manifest, project_root, generated_dir, force=True)
     validation = export_result.validation
@@ -476,7 +606,75 @@ def plan_managed_apply(
     return plan
 
 
+def _safe_copy_backup_file(
+    plan: ApplyPlan,
+    source: Path,
+    backup: Path,
+    expected_checksum: str,
+) -> str:
+    _ensure_safe_transaction_file_path(plan, backup, label="backup file")
+    temp = _temp_sibling(backup)
+    try:
+        _ensure_safe_transaction_file_path(plan, temp, label="backup temp")
+        _copy_verified_to_temp(
+            source,
+            temp,
+            expected_checksum,
+            plan.project_root,
+            label="backup",
+        )
+        _ensure_safe_transaction_file_path(plan, backup, label="backup file")
+        temp.replace(backup)
+        _ensure_safe_transaction_file_path(plan, backup, label="backup file")
+        if sha256_file(backup) != expected_checksum:
+            raise RuntimeError(f"{_rel(backup, plan.project_root)} backup checksum mismatch")
+        return _rel(backup, plan.project_root)
+    except Exception:
+        _cleanup_temp_file(temp)
+        raise
+
+
+def _safe_copy_target_file(plan: ApplyPlan, op: ApplyOperation, source: Path, target: Path) -> str:
+    target_rel = _rel(target, plan.project_root)
+    _ensure_safe_project_directory(plan.project_root, target.parent, label="target parent")
+    _reject_symlinked_target_components(plan, op)
+    temp = _temp_sibling(target)
+    try:
+        _reject_symlinked_project_components(plan.project_root, temp, label="target temp")
+        _copy_verified_to_temp(
+            source,
+            temp,
+            op.source_checksum,
+            plan.project_root,
+            label=f"{op.target_rel} target temp",
+        )
+        _reject_symlinked_target_components(plan, op)
+        if op.target_checksum:
+            if not target.is_file():
+                raise RuntimeError(f"{op.target_rel} changed since preview")
+            if sha256_file(target) != op.target_checksum:
+                raise RuntimeError(f"{op.target_rel} changed since preview")
+        elif target.exists():
+            raise RuntimeError(f"{op.target_rel} changed since preview")
+
+        temp.replace(target)
+        _reject_symlinked_target_components(plan, op)
+        if sha256_file(target) != op.source_checksum:
+            raise RuntimeError(f"{op.target_rel} copied checksum mismatch")
+        return target_rel
+    except Exception:
+        _cleanup_temp_file(temp)
+        raise
+
+
 def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
+    _ensure_safe_transaction_directory(plan, plan.transaction_dir, label="transaction directory")
+    _ensure_safe_transaction_file_path(
+        plan,
+        plan.record_path,
+        label="apply record",
+        create_parent=False,
+    )
     if plan.has_conflicts:
         _write_failed_record(plan, "Plan contains conflicts")
         raise RuntimeError("Cannot apply while conflicts are present")
@@ -489,7 +687,7 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
     try:
         _verify_plan_preconditions(plan)
         backup_root = plan.transaction_dir / "backups"
-        backup_root.mkdir(parents=True, exist_ok=True)
+        _ensure_safe_transaction_directory(plan, backup_root, label="backup directory")
 
         for op in plan.operations:
             if op.kind == ApplyOperationKind.UNCHANGED:
@@ -499,23 +697,18 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
             source = _operation_source_path(plan, op)
             target = _operation_target_path(plan, op)
             target_rel = _rel(target, plan.project_root)
-            target.parent.mkdir(parents=True, exist_ok=True)
 
             if target.is_file():
+                _reject_symlinked_target_components(plan, op)
+                if not op.target_checksum or sha256_file(target) != op.target_checksum:
+                    raise RuntimeError(f"{op.target_rel} changed since preview")
                 backup = backup_root / target_rel
-                backup.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(target, backup)
-                backup_rel = _rel(backup, plan.project_root)
-                if sha256_file(backup) != op.target_checksum:
-                    raise RuntimeError(f"{op.target_rel} backup checksum mismatch")
+                backup_rel = _safe_copy_backup_file(plan, target, backup, op.target_checksum)
                 op.backup_rel = backup_rel
                 backups.append(backup_rel)
 
             files_touched.append(target_rel)
-            shutil.copy2(source, target)
-            if sha256_file(target) != op.source_checksum:
-                raise RuntimeError(f"{op.target_rel} copied checksum mismatch")
-            files_written.append(target_rel)
+            files_written.append(_safe_copy_target_file(plan, op, source, target))
             completed_ops.append(op)
     except Exception as exc:
         _write_failed_record(
