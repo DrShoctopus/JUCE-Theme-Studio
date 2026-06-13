@@ -1509,7 +1509,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "No project", "Open a project first.")
             return
 
-        report = validate_manifest(self._project.manifest, self._project.root)
+        apply_validation_manifest = copy.deepcopy(self._project.manifest)
+        apply_validation_manifest.export_settings.output_subdir = "exports"
+        report = validate_manifest(apply_validation_manifest, self._project.root)
         self._log_panel.set_validation(report)
         if report.has_blocking_errors:
             QMessageBox.warning(

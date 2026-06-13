@@ -28,8 +28,9 @@ _SECTIONS: list[tuple[str, str]] = [
 
 <h3>What is JUCE Theme Studio?</h3>
 <p>JUCE Theme Studio is a standalone visual editor for designing, previewing, and exporting
-themes for JUCE audio plugins and applications. It works non-destructively alongside your
-existing JUCE project — your original source files are never modified.</p>
+themes for JUCE audio plugins and applications. Scanning and export work non-destructively
+alongside your existing JUCE project; <b>Apply to Project</b> is the explicit managed write
+path with preview, transaction backups, and revert support.</p>
 
 <h3>Opening a Project</h3>
 <ol>

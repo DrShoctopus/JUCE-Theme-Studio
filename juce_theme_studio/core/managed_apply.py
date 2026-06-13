@@ -53,6 +53,7 @@ class ApplyStatus(str, Enum):
 
 _ACTIVE_HISTORY_STATUSES = {
     ApplyStatus.COMPLETED.value,
+    ApplyStatus.FAILED.value,
     ApplyStatus.REVERTING.value,
     ApplyStatus.REVERT_FAILED.value,
 }
@@ -311,6 +312,49 @@ def _safe_record_target_rel(_project_root: Path, value: Any) -> str | None:
     return _safe_relative_record_path(value)
 
 
+def _safe_record_destination_subdir(value: Any) -> str | None:
+    if value is None:
+        value = DEFAULT_DESTINATION_SUBDIR
+    return _safe_relative_record_path(value)
+
+
+def _safe_record_rel_set(value: Any) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    result: set[str] = set()
+    for item in value:
+        rel = _safe_relative_record_path(item)
+        if rel is None:
+            return set()
+        result.add(rel)
+    return result
+
+
+def _is_managed_payload_rel(value: str) -> bool:
+    rel = _safe_relative_record_path(value)
+    if rel is None:
+        return False
+    path = Path(rel)
+    if len(path.parts) == 1 and path.name in MANAGED_OUTPUT_FILES:
+        return True
+    return len(path.parts) > 1 and path.parts[0] == "assets"
+
+
+def _target_matches_managed_payload(
+    *,
+    destination_subdir: str,
+    source_rel: str,
+    target_rel: str,
+) -> bool:
+    if not _is_managed_payload_rel(source_rel):
+        return False
+    try:
+        payload_rel = Path(target_rel).relative_to(Path(destination_subdir))
+    except ValueError:
+        return False
+    return str(payload_rel).replace("\\", "/") == source_rel
+
+
 def _safe_record_backup_rel(
     project_root: Path,
     value: Any,
@@ -364,6 +408,7 @@ def _validated_history_operation(
     project_root: Path,
     item: Any,
     *,
+    destination_subdir: str,
     backup_root: Path | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(item, dict):
@@ -378,6 +423,12 @@ def _validated_history_operation(
     source_checksum = item.get("source_checksum")
     target_checksum = _safe_record_checksum(item.get("target_checksum", ""))
     if source_rel is None or target_rel is None or not _is_sha256_checksum(source_checksum):
+        return None
+    if not _target_matches_managed_payload(
+        destination_subdir=destination_subdir,
+        source_rel=source_rel,
+        target_rel=target_rel,
+    ):
         return None
     if target_checksum is None:
         return None
@@ -459,13 +510,54 @@ def _validated_history_record(
     operations = record.get("operations")
     if not isinstance(operations, list):
         return None
+    destination_subdir = _safe_record_destination_subdir(record.get("destination_subdir"))
+    if destination_subdir is None:
+        return None
 
     backup_root = record_path.parent / "backups" if record_path is not None else None
+    if status == ApplyStatus.FAILED.value:
+        files_written = _safe_record_rel_set(record.get("files_written"))
+        if not files_written:
+            return None
+        valid_operations: list[dict[str, Any]] = []
+        for item in operations:
+            if not isinstance(item, dict):
+                return None
+            target_rel = _safe_record_target_rel(project_root, item.get("target_rel"))
+            if target_rel not in files_written:
+                continue
+            operation = _validated_history_operation(
+                project_root,
+                item,
+                destination_subdir=destination_subdir,
+                backup_root=backup_root,
+            )
+            if operation is None or operation["kind"] == ApplyOperationKind.UNCHANGED.value:
+                return None
+            valid_operations.append(operation)
+        if not valid_operations:
+            return None
+        matched_written = {operation["target_rel"] for operation in valid_operations}
+        if matched_written != files_written:
+            return None
+
+        sanitized = dict(record)
+        if trusted_apply_id is not None:
+            sanitized["apply_id"] = trusted_apply_id
+            sanitized["record_path"] = str(record_path)
+            sanitized["transaction_dir"] = str(record_path.parent)
+        sanitized["status"] = str(status)
+        sanitized["destination_subdir"] = destination_subdir
+        sanitized["files_written"] = sorted(files_written)
+        sanitized["operations"] = valid_operations
+        return sanitized
+
     valid_operations: list[dict[str, Any]] = []
     for item in operations:
         operation = _validated_history_operation(
             project_root,
             item,
+            destination_subdir=destination_subdir,
             backup_root=backup_root,
         )
         if operation is None:
@@ -480,6 +572,7 @@ def _validated_history_record(
         sanitized["record_path"] = str(record_path)
         sanitized["transaction_dir"] = str(record_path.parent)
     sanitized["status"] = str(status)
+    sanitized["destination_subdir"] = destination_subdir
     sanitized["operations"] = valid_operations
     return sanitized
 
@@ -637,17 +730,32 @@ def _raise_unresolved_revert(record: dict[str, Any]) -> None:
     )
 
 
+def _raise_unresolved_failed_apply(record: dict[str, Any]) -> None:
+    raise RuntimeError(
+        "Latest managed apply failed after writing files "
+        f"for apply_id {record['apply_id']!r}; revert it before applying again"
+    )
+
+
 def _latest_managed_checksums(project_root: Path) -> dict[str, str]:
     latest = latest_active_apply(project_root)
     if not latest:
         return {}
+    if latest["status"] == ApplyStatus.FAILED.value:
+        _raise_unresolved_failed_apply(latest)
     if latest["status"] in _UNRESOLVED_REVERT_STATUSES:
         _raise_unresolved_revert(latest)
     transaction_dir = latest.get("transaction_dir")
     backup_root = Path(transaction_dir) / "backups" if isinstance(transaction_dir, str) else None
     checksums: dict[str, str] = {}
     for item in latest.get("operations", []):
-        operation = _validated_history_operation(project_root, item, backup_root=backup_root)
+        destination_subdir = str(latest.get("destination_subdir", DEFAULT_DESTINATION_SUBDIR))
+        operation = _validated_history_operation(
+            project_root,
+            item,
+            destination_subdir=destination_subdir,
+            backup_root=backup_root,
+        )
         if operation:
             checksums[operation["target_rel"]] = operation["source_checksum"]
     return checksums

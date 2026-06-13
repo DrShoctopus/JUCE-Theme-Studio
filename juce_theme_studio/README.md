@@ -84,7 +84,9 @@ python -m juce_theme_studio.app.main
 4. Detected `juce::Component` screens appear in the **Screens** list.
    Use **New Screen** for manual layouts.
 
-Your original source files and assets are **never** modified.
+Scanning and export do not modify your original source files or assets. Use
+**Apply to Project** when you want Theme Studio to write managed generated files
+into `Source/ThemeStudio/` with preview, transaction backups, and revert support.
 
 When you reopen a project, saved control positions and sizes are restored from
 `theme_project.json`. Controls can be dragged and resized unless they are

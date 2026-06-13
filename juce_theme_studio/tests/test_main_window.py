@@ -222,6 +222,46 @@ def test_apply_cancel_does_not_write_project_files(
     assert calls == []
 
 
+def test_apply_ignores_manual_export_output_subdir_validation(
+    window,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from juce_theme_studio.gui import main_window as main_window_module
+
+    plan_calls: list[str] = []
+    warnings: list[str] = []
+    window._project.manifest.export_settings.output_subdir = "../outside"
+
+    def stop_after_validation(manifest, root):  # noqa: ANN001
+        plan_calls.append(manifest.export_settings.output_subdir)
+        raise RuntimeError("planned after validation")
+
+    monkeypatch.setattr(
+        main_window_module,
+        "get_status",
+        lambda root: SimpleNamespace(has_unrelated_changes=False),
+    )
+    monkeypatch.setattr(main_window_module, "plan_managed_apply", stop_after_validation)
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(str(args[2])),
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "critical",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(window, "_refresh_git_status", lambda: None)
+
+    window._apply_to_project()
+
+    assert plan_calls == ["../outside"]
+    assert warnings == []
+
+
 def test_apply_failure_refreshes_git_status(
     window,
     monkeypatch: pytest.MonkeyPatch,

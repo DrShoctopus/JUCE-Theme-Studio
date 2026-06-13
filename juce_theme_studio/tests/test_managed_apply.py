@@ -706,6 +706,33 @@ def test_completed_apply_records_ignore_mismatched_apply_id(fixture_project: Pat
     assert completed_apply_records(loaded.root) == []
 
 
+def test_revert_ignores_forged_record_outside_managed_destination(
+    fixture_project: Path,
+) -> None:
+    from juce_theme_studio.core.managed_apply import revert_last_apply, sha256_file
+
+    target = fixture_project / "Source" / "Main.cpp"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("original source file\n", encoding="utf-8")
+    operation = {
+        "kind": "create",
+        "source_rel": "ThemeLayout.json",
+        "target_rel": "Source/Main.cpp",
+        "source_checksum": sha256_file(target),
+        "target_checksum": "",
+        "backup_rel": "",
+        "message": "forged create outside managed destination",
+    }
+    record = _completed_record(operation, completed_at="2026-06-13T13:00:00+00:00")
+    record["destination_subdir"] = "Source/ThemeStudio"
+    _write_apply_record(fixture_project, "forged-outside-destination", record)
+
+    with pytest.raises(RuntimeError, match="No completed managed apply"):
+        revert_last_apply(fixture_project)
+
+    assert target.read_text(encoding="utf-8") == "original source file\n"
+
+
 def test_completed_apply_records_ignore_symlinked_transaction_directory(
     fixture_project: Path,
 ) -> None:
@@ -1030,6 +1057,51 @@ def test_execute_managed_apply_failed_record_preserves_partial_recovery_metadata
     assert len(record["backups"]) >= 2
     assert any(rel.endswith(replace_ops[0].target_rel) for rel in backup_rels)
     assert any(rel.endswith(replace_ops[1].target_rel) for rel in backup_rels)
+
+
+def test_failed_partial_create_must_be_reverted_before_retry(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="failed-create")
+    real_copy2 = managed_apply_module.shutil.copy2
+    target_writes = 0
+
+    def fail_after_first_target_copy(src: Path, dst: Path) -> Path:
+        nonlocal target_writes
+        target = Path(dst)
+        if target.is_relative_to(fixture_project / "Source" / "ThemeStudio"):
+            target_writes += 1
+            if target_writes == 2:
+                raise OSError("simulated second write failure")
+        return real_copy2(src, dst)
+
+    monkeypatch.setattr(managed_apply_module.shutil, "copy2", fail_after_first_target_copy)
+
+    with pytest.raises(OSError, match="simulated second write failure"):
+        execute_managed_apply(plan)
+
+    record = json.loads(plan.record_path.read_text(encoding="utf-8"))
+    assert len(record["files_written"]) == 1
+    first_target = record["files_written"][0]
+    first_written = fixture_project / first_target
+    assert first_written.is_file()
+    monkeypatch.setattr(managed_apply_module.shutil, "copy2", real_copy2)
+
+    with pytest.raises(RuntimeError, match="failed after writing files"):
+        plan_managed_apply(loaded.manifest, loaded.root, apply_id="retry-before-revert")
+
+    result = managed_apply_module.revert_last_apply(fixture_project)
+
+    assert result.apply_id == "failed-create"
+    assert first_target in result.files_removed
+    assert not first_written.exists()
+    assert plan_managed_apply(loaded.manifest, loaded.root, apply_id="retry-after-revert")
 
 
 def test_execute_managed_apply_failed_record_when_completion_record_write_fails(
@@ -1640,28 +1712,28 @@ def test_revert_failure_after_partial_restore_marks_record_failed(
     from juce_theme_studio.core.managed_apply import ApplyStatus, revert_last_apply, sha256_file
 
     apply_id = "revert-partial-failure"
-    first = fixture_project / "Source" / "ThemeStudio" / "first.txt"
-    second = fixture_project / "Source" / "ThemeStudio" / "second.txt"
+    first = fixture_project / "Source" / "ThemeStudio" / "ThemeAssets.h"
+    second = fixture_project / "Source" / "ThemeStudio" / "ThemeAssets.cpp"
     first.parent.mkdir(parents=True)
     first.write_text("first applied\n", encoding="utf-8")
     second.write_text("second applied\n", encoding="utf-8")
     first_backup_rel, first_target_checksum = _write_history_backup(
         fixture_project,
         apply_id,
-        "Source/ThemeStudio/first.txt",
+        "Source/ThemeStudio/ThemeAssets.h",
         "first previous\n",
     )
     second_backup_rel, second_target_checksum = _write_history_backup(
         fixture_project,
         apply_id,
-        "Source/ThemeStudio/second.txt",
+        "Source/ThemeStudio/ThemeAssets.cpp",
         "second previous\n",
     )
     operations = [
         {
             "kind": "replace",
-            "source_rel": "generated/first.txt",
-            "target_rel": "Source/ThemeStudio/first.txt",
+            "source_rel": "ThemeAssets.h",
+            "target_rel": "Source/ThemeStudio/ThemeAssets.h",
             "source_checksum": sha256_file(first),
             "target_checksum": first_target_checksum,
             "backup_rel": first_backup_rel,
@@ -1669,8 +1741,8 @@ def test_revert_failure_after_partial_restore_marks_record_failed(
         },
         {
             "kind": "replace",
-            "source_rel": "generated/second.txt",
-            "target_rel": "Source/ThemeStudio/second.txt",
+            "source_rel": "ThemeAssets.cpp",
+            "target_rel": "Source/ThemeStudio/ThemeAssets.cpp",
             "source_checksum": sha256_file(second),
             "target_checksum": second_target_checksum,
             "backup_rel": second_backup_rel,
@@ -1718,7 +1790,7 @@ def test_revert_failure_after_partial_restore_marks_record_failed(
     record = json.loads(record_path.read_text(encoding="utf-8"))
     assert record["status"] == ApplyStatus.REVERT_FAILED.value
     assert record["message"] == "simulated revert restore failure"
-    assert record["revert"]["files_restored"] == ["Source/ThemeStudio/second.txt"]
+    assert record["revert"]["files_restored"] == ["Source/ThemeStudio/ThemeAssets.cpp"]
     assert record["revert"]["files_removed"] == []
     assert record["revert"]["force"] is False
     assert "revert_failed_at" in record
@@ -1735,13 +1807,13 @@ def test_revert_writes_sanitized_selected_record_when_raw_record_changes(
     from juce_theme_studio.core.managed_apply import revert_last_apply, sha256_file
 
     apply_id = "revert-sanitized-record"
-    target_rel = "Source/ThemeStudio/created.txt"
+    target_rel = "Source/ThemeStudio/ThemeLayout.json"
     target = fixture_project / target_rel
     target.parent.mkdir(parents=True)
     target.write_text("created managed file\n", encoding="utf-8")
     operation = {
         "kind": "create",
-        "source_rel": "generated/created.txt",
+        "source_rel": "ThemeLayout.json",
         "target_rel": target_rel,
         "source_checksum": sha256_file(target),
         "target_checksum": "",
