@@ -429,14 +429,18 @@ def _enhance_screens_with_ast(
         return
 
     by_class = {screen.class_name: screen for screen in screens}
+    classified_files = {screen.source_file for screen in screens}
     for path in files:
         ast_screen = scanner_ast.analyze_with_ast(path, root)
         if ast_screen is None:
             continue
         target = by_class.get(ast_screen.class_name)
         if target is None:
+            if ast_screen.source_file in classified_files:
+                continue
             screens.append(ast_screen)
             by_class[ast_screen.class_name] = ast_screen
+            classified_files.add(ast_screen.source_file)
             continue
         seen = {control.cpp_variable for control in target.controls}
         for control in ast_screen.controls:

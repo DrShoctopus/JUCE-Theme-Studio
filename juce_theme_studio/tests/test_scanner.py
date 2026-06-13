@@ -90,6 +90,39 @@ def test_scan_detects_custom_page_base_subclasses(tmp_path: Path) -> None:
     assert {c.cpp_variable for c in pedals.controls} == {"driveSlider"}
 
 
+def test_ast_enhancement_does_not_readd_filtered_direct_component(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from juce_theme_studio.juce import scanner_ast
+    from juce_theme_studio.juce.scanner import DetectedScreen
+
+    src = tmp_path / "Source" / "ui"
+    src.mkdir(parents=True)
+    path = src / "Pages.h"
+    path.write_text(_PAGE_BASE_HEADER)
+
+    def fake_analyze(candidate: Path, root: Path) -> DetectedScreen | None:
+        if candidate == path:
+            return DetectedScreen(
+                id="ast",
+                name="ShellUI",
+                class_name="ShellUI",
+                source_file="Source/ui/Pages.h",
+            )
+        return None
+
+    monkeypatch.setattr(scanner_ast, "analyze_with_ast", fake_analyze)
+
+    result = scan_juce_project(tmp_path)
+
+    assert {s.class_name for s in result.screens} == {
+        "PedalsPage",
+        "AmpPage",
+        "CabPostPage",
+    }
+
+
 def test_scan_detects_audio_processor_editor_screen(tmp_path: Path) -> None:
     src = tmp_path / "Source"
     src.mkdir()
