@@ -283,6 +283,14 @@ position your existing components via <code>applyScreenLayout()</code>.</p>
       <code>.juce_theme_studio/backups/</code>.</li>
 </ol>
 
+<h3>Managed Apply</h3>
+<p><b>Apply to Project</b> copies generated runtime files into
+<code>Source/ThemeStudio/</code> and records a reversible transaction under
+<code>.juce_theme_studio/applies/</code>.</p>
+<p>The preview lists creates, replacements, unchanged files, and conflicts before
+anything in the project is modified. Use <b>Revert Last Apply</b> to restore the
+latest completed transaction.</p>
+
 <h3>Generated Files</h3>
 <table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse">
   <tr><th>File</th><th>Description</th></tr>
