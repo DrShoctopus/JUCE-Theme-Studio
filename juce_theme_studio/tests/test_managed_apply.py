@@ -753,6 +753,50 @@ def test_execute_managed_apply_failed_record_preserves_partial_recovery_metadata
     assert any(rel.endswith(replace_ops[1].target_rel) for rel in backup_rels)
 
 
+def test_execute_managed_apply_failed_record_when_completion_record_write_fails(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import (
+        ApplyOperationKind,
+        ApplyStatus,
+        execute_managed_apply,
+        plan_managed_apply,
+    )
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="complete-fail-first")
+    execute_managed_apply(first)
+    loaded.manifest.theme_colors["primary"] = "ff778899"
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="complete-fail-second")
+    expected_written = [
+        op.target_rel for op in second.operations if op.kind != ApplyOperationKind.UNCHANGED
+    ]
+    assert expected_written
+
+    def fail_completed_record(plan: managed_apply_module.ApplyPlan) -> None:
+        raise RuntimeError(f"simulated completed record failure for {plan.apply_id}")
+
+    monkeypatch.setattr(managed_apply_module, "_write_completed_record", fail_completed_record)
+
+    with pytest.raises(RuntimeError, match="simulated completed record failure"):
+        execute_managed_apply(second)
+
+    record = json.loads(second.record_path.read_text(encoding="utf-8"))
+    backup_rels = [op["backup_rel"] for op in record["operations"] if op["backup_rel"]]
+    assert second.status == ApplyStatus.FAILED
+    assert record["status"] == "failed"
+    assert "simulated completed record failure" in record["message"]
+    assert record["files_written"] == expected_written
+    assert record["files_touched"] == expected_written
+    assert record["backups"]
+    assert all(
+        any(rel.endswith(target_rel) for rel in backup_rels) for target_rel in expected_written
+    )
+
+
 def test_execute_managed_apply_fails_when_copied_target_checksum_mismatches(
     fixture_project: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -737,6 +737,9 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
             files_touched.append(target_rel)
             files_written.append(_safe_copy_target_file(plan, op, source, target))
             completed_ops.append(op)
+
+        plan.operations = completed_ops
+        _write_completed_record(plan)
     except Exception as exc:
         _write_failed_record(
             plan,
@@ -748,8 +751,6 @@ def execute_managed_apply(plan: ApplyPlan) -> ApplyResult:
         raise
 
     plan.status = ApplyStatus.COMPLETED
-    plan.operations = completed_ops
-    _write_completed_record(plan)
     return ApplyResult(
         status=ApplyStatus.COMPLETED,
         record_path=plan.record_path,
