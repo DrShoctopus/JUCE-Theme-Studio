@@ -184,15 +184,27 @@ def _reject_symlinked_path_components(root: Path, rel: Path, *, label: str) -> N
 
 
 def _reject_symlinked_project_components(project_root: Path, path: Path, *, label: str) -> None:
+    symlink_rel = _first_symlinked_project_component(project_root, path, label=label)
+    if symlink_rel is not None:
+        raise RuntimeError(f"Unsafe {label}: symlink at {symlink_rel}")
+
+
+def _first_symlinked_project_component(
+    project_root: Path,
+    path: Path,
+    *,
+    label: str,
+) -> str | None:
     root = project_root.resolve()
     rel = _project_relative_path(root, path, label=label)
     current = root
     for part in rel.parts:
         current = current / part
         if current.is_symlink():
-            raise RuntimeError(f"Unsafe {label}: symlink at {_rel(current, root)}")
+            return _rel(current, root)
         if not current.exists():
             break
+    return None
 
 
 def _ensure_safe_project_directory(project_root: Path, path: Path, *, label: str) -> None:
@@ -648,9 +660,19 @@ def plan_managed_apply(
         target = destination / source_rel
         target_rel = _rel(target, project_root)
         source_checksum = sha256_file(source)
-        target_checksum = sha256_file(target) if target.is_file() else ""
+        symlink_rel = _first_symlinked_project_component(
+            project_root,
+            target,
+            label="target",
+        )
+        target_checksum = ""
+        if symlink_rel is None and target.is_file():
+            target_checksum = sha256_file(target)
 
-        if not target.exists():
+        if symlink_rel:
+            kind = ApplyOperationKind.CONFLICT
+            message = f"Destination path contains symlink at {symlink_rel}"
+        elif not target.exists():
             kind = ApplyOperationKind.CREATE
             message = "Create managed file"
         elif target_checksum == source_checksum:

@@ -1400,3 +1400,35 @@ def test_plan_managed_apply_rejects_symlinked_destination_before_planning(
         plan_managed_apply(loaded.manifest, loaded.root, apply_id="symlink-before-plan")
 
     assert not (redirected / "ThemeLayout.json").exists()
+
+
+def test_plan_managed_apply_marks_symlinked_target_conflict_without_hashing_it(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+    target = fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json"
+    target.parent.mkdir(parents=True)
+    redirected = fixture_project.parent / "redirected-layout.json"
+    redirected.write_text("outside project target\n", encoding="utf-8")
+    target.symlink_to(redirected)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import ApplyOperationKind, plan_managed_apply
+
+    real_sha256 = managed_apply_module.sha256_file
+
+    def reject_symlink_checksum(path: Path) -> str:
+        candidate = Path(path)
+        if candidate == target:
+            raise AssertionError("planner must not checksum symlinked target")
+        return real_sha256(candidate)
+
+    monkeypatch.setattr(managed_apply_module, "sha256_file", reject_symlink_checksum)
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="target-link-plan")
+
+    layout = next(op for op in plan.operations if op.target_rel.endswith("ThemeLayout.json"))
+    assert layout.kind == ApplyOperationKind.CONFLICT
+    assert layout.target_checksum == ""
+    assert "symlink" in layout.message
