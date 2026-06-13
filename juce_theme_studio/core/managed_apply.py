@@ -790,7 +790,7 @@ def _write_completed_record(plan: ApplyPlan) -> None:
         "validation": _validation_to_dict(plan.validation),
         "operations": [op.to_dict() for op in plan.operations],
     }
-    plan.record_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    _write_record_data(plan, data)
 
 
 def _write_failed_record(
@@ -819,5 +819,4 @@ def _write_failed_record(
     if isinstance(existing.get("created_at"), str):
         data["created_at"] = existing["created_at"]
     plan.status = ApplyStatus.FAILED
-    plan.record_path.parent.mkdir(parents=True, exist_ok=True)
-    plan.record_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    _write_record_data(plan, data)

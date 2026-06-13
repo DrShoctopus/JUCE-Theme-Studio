@@ -833,6 +833,80 @@ def test_execute_managed_apply_rejects_symlinked_record_path(
     assert not (fixture_project / "Source" / "ThemeStudio" / "ThemeLayout.json").exists()
 
 
+def test_execute_managed_apply_rejects_record_symlink_before_completed_record_write(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="complete-record-link")
+    redirected_record = fixture_project.parent / "complete-redirected-apply.json"
+    redirected_record.write_text("outside completed record\n", encoding="utf-8")
+    real_copy_target = managed_apply_module._safe_copy_target_file
+    swapped = False
+
+    def swap_record_before_completed_write(
+        plan_arg: managed_apply_module.ApplyPlan,
+        op: managed_apply_module.ApplyOperation,
+        source: Path,
+        target: Path,
+    ) -> str:
+        nonlocal swapped
+        result = real_copy_target(plan_arg, op, source, target)
+        if not swapped:
+            plan.record_path.unlink()
+            plan.record_path.symlink_to(redirected_record)
+            swapped = True
+        return result
+
+    monkeypatch.setattr(
+        managed_apply_module,
+        "_safe_copy_target_file",
+        swap_record_before_completed_write,
+    )
+
+    with pytest.raises(RuntimeError, match="symlink"):
+        execute_managed_apply(plan)
+
+    assert redirected_record.read_text(encoding="utf-8") == "outside completed record\n"
+    assert plan.record_path.is_symlink()
+
+
+def test_execute_managed_apply_rejects_record_symlink_before_failed_record_write(
+    fixture_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core import managed_apply as managed_apply_module
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    plan = plan_managed_apply(loaded.manifest, loaded.root, apply_id="failed-record-link")
+    redirected_record = fixture_project.parent / "failed-redirected-apply.json"
+    redirected_record.write_text("outside failed record\n", encoding="utf-8")
+    real_copy2 = managed_apply_module.shutil.copy2
+
+    def corrupt_after_record_swap(src: Path, dst: Path) -> Path:
+        destination = Path(dst)
+        if Path(src) == plan.generated_dir / "ThemeLayout.json":
+            plan.record_path.unlink()
+            plan.record_path.symlink_to(redirected_record)
+            destination.write_text("wrong target content\n", encoding="utf-8")
+            return destination
+        return real_copy2(src, dst)
+
+    monkeypatch.setattr(managed_apply_module.shutil, "copy2", corrupt_after_record_swap)
+
+    with pytest.raises(RuntimeError):
+        execute_managed_apply(plan)
+
+    assert redirected_record.read_text(encoding="utf-8") == "outside failed record\n"
+    assert plan.record_path.is_symlink()
+
+
 def test_execute_managed_apply_rejects_target_swapped_to_symlink_before_write(
     fixture_project: Path,
     monkeypatch: pytest.MonkeyPatch,
