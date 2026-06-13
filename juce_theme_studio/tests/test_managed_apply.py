@@ -619,6 +619,28 @@ def test_execute_managed_apply_aborts_when_unchanged_source_deleted_after_previe
     assert record["status"] == "failed"
 
 
+def test_execute_managed_apply_aborts_when_unchanged_source_changed_after_preview(
+    fixture_project: Path,
+) -> None:
+    loaded = _project_with_theme(fixture_project)
+
+    from juce_theme_studio.core.managed_apply import execute_managed_apply, plan_managed_apply
+
+    first = plan_managed_apply(loaded.manifest, loaded.root, apply_id="unchanged-change-first")
+    execute_managed_apply(first)
+    second = plan_managed_apply(loaded.manifest, loaded.root, apply_id="unchanged-change-second")
+    layout = next(op for op in second.operations if op.target_rel.endswith("ThemeLayout.json"))
+    (second.generated_dir / layout.source_rel).write_text(
+        "changed unchanged source\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="source file changed since preview"):
+        execute_managed_apply(second)
+    record = json.loads(second.record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "failed"
+
+
 def test_execute_managed_apply_failed_record_preserves_partial_recovery_metadata(
     fixture_project: Path,
     monkeypatch: pytest.MonkeyPatch,
